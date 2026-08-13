@@ -1,0 +1,38 @@
+# Node 依赖
+node_modules/
+
+# 打包产物
+dist/
+dist_new/
+build/
+build_new/
+out/
+release/
+
+# PyInstaller 中间产物
+*.spec.bak
+__pycache__/
+*.pyc
+
+# 大体积产物（安装包/模型/权重，不进仓库）
+*.exe
+*.7z
+*.onnx
+*.pt
+*.pth
+
+# 采集样本与训练数据
+collected/
+采集样本/
+train_runs/
+retrain_ds/
+
+# 日志与临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
