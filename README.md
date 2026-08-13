@@ -87,3 +87,97 @@
 ---
 
 **一起开黑就是对作者最大的支持** 💛
+
+---
+
+# English
+
+## WT Screen Pixel Ruler
+
+**War Thunder Map Marker Rangefinding**
+
+A free, open-source rangefinding assistant for *War Thunder*. It uses AI vision to detect the "yellow marker" and "tank arrow" on the minimap, automatically calculates the target distance, and supports collecting samples and training your own recognition model while measuring.
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
+---
+
+## What is this
+
+In *War Thunder*, the pixel distance between the **yellow marker** (teammate ping) and the **tank arrow** on the minimap, combined with the map scale, can be converted into a real in-game distance. This tool uses **AI object detection** to automatically recognize these two targets, computes the distance in real time, and announces it by voice — replacing tedious manual measurement.
+
+## Features
+
+### 🎯 AI Rangefinding
+- Select a minimap region to automatically detect the "yellow marker" and "arrow" targets
+- Real-time pixel distance between their centers, converted to actual distance via a scale factor
+- Adjustable detection confidence threshold (0.15 ~ 0.80)
+
+### 📐 Manual Pixel Measurement
+- Four measurement modes: Line / Horizontal / Vertical / Rectangle
+- Magnifier-assisted precise positioning
+- Custom conversion factor (grid distance ÷ measured pixel value)
+
+### 🧠 Sample Collection & AI Training
+- Auto-collects training samples while measuring (low threshold captures weak detections)
+- Manual selection of high-quality samples / auto-filtering
+- Incrementally train your own YOLOv8 model — the more it trains, the better it gets
+- F1 non-degradation guard: a worse new model will never replace a good one
+
+### 🔊 Voice Announcement
+- Auto voice announcement of measurement results (Microsoft edge-tts)
+- Multiple built-in voices, custom voice pack support
+
+### 🖥 Desktop Experience
+- Transparent always-on-top window with mouse click-through
+- Auto-collapse when docked to screen edge, slide out on hover
+- Multi-monitor + DPI scaling auto-adaptation
+- Customizable theme color, opacity, and hotkeys
+- Fully standalone — no Python installation required
+
+### 🔄 Auto Update
+- Checks for new versions via GitHub Releases
+- Red indicator light on update, one-click download & install in-app
+
+### 🔍 More
+- Statshark player data lookup
+- KOOK voice community entry
+
+## Tech Stack
+
+| Module | Technology |
+|--------|------------|
+| Desktop framework | Electron |
+| UI | HTML5 Canvas + CSS3 |
+| Object detection | OpenCV DNN + YOLOv5 ONNX |
+| Model training | Ultralytics YOLOv8 |
+| Screen capture | MSS / DXcam |
+| Text-to-speech | Microsoft edge-tts |
+| Packaging | PyInstaller + 7z SFX |
+
+## Usage
+
+1. Launch the app; first-time users must read and agree to the user agreement
+2. Click "Select region", drag to select the minimap area in-game, then click "Confirm"
+3. Click "Start AI Ranging" — the app auto-detects the marker and arrow and measures distance
+4. Adjust confidence threshold, voice, opacity, theme, and hotkeys in Settings
+
+Refer to the in-app beginner guide for detailed steps.
+
+## License
+
+This project is licensed under **GPL-3.0**.
+
+- Completely free and permanently open-source — no fees, ever
+- ⚠️ Any commercial / for-profit use is strictly prohibited (reselling, charging, bundling, renting, paid tutoring, etc.)
+- You are free to use, learn from, modify, and redistribute it
+
+## Disclaimer
+
+1. This software works solely through "screen capture + image recognition". It does **not read, modify, or inject** any game memory, files, or network packets, does **not tamper with game data**, and provides no cheating functionality.
+2. It runs entirely locally and uploads no game data or personal information.
+3. Please verify that your game's user agreement allows on-screen measurement tools; the user assumes all consequences (e.g. account bans) of using this software.
+
+---
+
+**Squad up — that's the best way to support the author** 💛
