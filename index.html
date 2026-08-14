@@ -1,0 +1,3043 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0, shrink-to-fit=no">
+  <title>屏幕像素测距 · 悬浮标尺</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+      overflow: hidden; background: transparent;
+      height: 100vh; width: 100vw;
+      user-select: none; -webkit-user-select: none;
+    }
+    #measureCanvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 9998; }
+    #interactionLayer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999; cursor: crosshair; background: transparent; touch-action: none; }
+    #modeOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9997; pointer-events: none; border: 3px solid transparent; transition: border-color 0.2s; }
+    #modeOverlay.active { border-color: rgba(255,217,102,0.2); }
+
+    .floating-panel {
+      position: fixed; top: 20px; right: 20px; z-index: 10000;
+      background: rgba(20,20,30,0.88); backdrop-filter: blur(20px);
+      border-radius: 16px; padding: 0; width: 380px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.12);
+      color: #fff; overflow: hidden;
+      transition: width 0.25s ease;
+    }
+    /* 停靠桌面边缘：隐藏面板，只留测量值 */
+    #floatingPanel.docked { width: auto; }
+    #floatingPanel.docked .panel-header,
+    #floatingPanel.docked .panel-body { display: none; }
+    .panel-header {
+      padding: 10px 16px; display: flex; align-items: center; justify-content: space-between;
+      background: rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.06); cursor: grab;
+    }
+    .panel-header:active { cursor: grabbing; }
+    .panel-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+    .win-controls { display: flex; gap: 6px; }
+    .win-btn {
+      width: 26px; height: 26px; border: none; border-radius: 6px;
+      background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.6);
+      font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+    .win-btn:hover { background: rgba(255,255,255,0.25); color: #fff; }
+    .win-btn.close-btn:hover { background: rgba(255,80,80,0.35); color: #ff6b6b; }
+    .theme-swatch {
+      width: 22px; height: 22px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);
+      cursor: pointer; transition: transform 0.15s, border-color 0.15s;
+    }
+    .theme-swatch:hover { transform: scale(1.15); }
+    .theme-swatch.active { border-color: #fff; transform: scale(1.15); }
+    .drawer-close {
+      position: absolute; top: 8px; right: 8px; width: 22px; height: 22px;
+      border: none; border-radius: 6px; background: rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.6); font-size: 12px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .drawer-close:hover { background: rgba(255,80,80,0.3); color: #ff6b6b; }
+    .panel-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+
+    .distance-display {
+      display: flex; align-items: baseline; gap: 8px;
+      background: rgba(0,0,0,0.4); border-radius: 12px; padding: 10px 18px;
+    }
+    .label { font-size: 12px; font-weight: 400; letter-spacing: 0.5px; color: rgba(255,255,255,0.6); text-transform: uppercase; }
+    #pixelValue { font-size: 28px; font-weight: 700; color: #ffd966; line-height: 1; text-shadow: 0 0 15px rgba(255,220,100,0.5); min-width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+    .unit { font-size: 16px; font-weight: 500; color: rgba(255,255,255,0.8); }
+
+    .formula-box {
+      background: rgba(0,0,0,0.3); border: 1px solid rgba(255,217,102,0.12);
+      border-radius: 10px; padding: 8px 14px; font-size: 12px; line-height: 1.8;
+      color: rgba(255,255,255,0.7); font-family: 'Cascadia Code','Consolas',monospace;
+    }
+    .formula-box .ftitle { color: rgba(255,217,102,0.7); font-size: 11px; margin-bottom: 2px; }
+    .formula-box .fline { display: flex; align-items: center; gap: 4px; }
+    .formula-box .delta { color: #ffd966; font-weight: 600; }
+    .formula-box .sqrt { font-size: 14px; }
+
+    .convert-row {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      background: rgba(255,217,102,0.06); border: 1px solid rgba(255,217,102,0.12);
+      border-radius: 10px; padding: 8px 12px;
+    }
+    .convert-row input {
+      width: 60px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1);
+      color: #ffd966; padding: 5px 6px; border-radius: 6px; font-size: 13px; font-weight: 600;
+      text-align: center; outline: none; font-family: inherit;
+    }
+    .convert-row input:focus { border-color: rgba(255,217,102,0.4); }
+
+    .mode-row { display: flex; gap: 5px; }
+    .mode-btn {
+      background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.65); padding: 6px 10px; border-radius: 8px;
+      font-size: 12px; cursor: pointer; transition: all 0.15s; font-family: inherit; flex: 1;
+    }
+    .mode-btn.active { background: rgba(255,217,102,0.15); border-color: rgba(255,217,102,0.35); color: #ffd966; }
+    .mode-btn:hover { background: rgba(255,255,255,0.12); }
+
+    .display-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    #displaySelect {
+      background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); color: #fff;
+      padding: 5px 8px; border-radius: 8px; font-size: 12px; cursor: pointer; outline: none;
+      font-family: inherit; flex: 1; min-width: 120px;
+    }
+    #displaySelect option { background: #1a1a28; }
+    .info-badge { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 3px 8px; font-size: 11px; color: rgba(255,255,255,0.65); white-space: nowrap; }
+
+    .measure-toggle {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 10px; border-radius: 10px; border: 2px solid rgba(255,217,102,0.25);
+      background: rgba(255,217,102,0.06); color: #ffd966; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: all 0.2s; font-family: inherit;
+    }
+    .measure-toggle:hover { background: rgba(255,217,102,0.12); border-color: rgba(255,217,102,0.4); }
+    .measure-toggle.active { background: rgba(255,80,80,0.15); border-color: rgba(255,80,80,0.35); color: #ff6b6b; }
+
+    .btn-group { display: flex; gap: 8px; align-items: center; }
+    .btn {
+      background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.18);
+      color: white; padding: 7px 14px; border-radius: 18px; font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 4px; font-family: inherit;
+    }
+    .btn:hover { background: rgba(255,255,255,0.28); border-color: rgba(255,255,255,0.5); filter: brightness(1.2); }
+    .btn:active { transform: scale(1.06); border-width: 2px; filter: brightness(1.35); }
+    .win-btn:active { transform: scale(1.1); }
+    .mode-btn:hover, .shortcut-btn:hover { filter: brightness(1.3); }
+    .mode-btn:active, .shortcut-btn:active { transform: scale(1.08); }
+    .btn.clear-btn { background: rgba(255,90,90,0.12); border-color: rgba(255,100,100,0.3); }
+    .btn.clear-btn:hover { background: rgba(255,70,70,0.25); }
+    .coords-hint { font-size: 11px; color: rgba(255,255,255,0.5); display: flex; align-items: center; gap: 4px; margin-left: auto; }
+    .dot-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 10px currentColor; }
+    .divider { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 2px 0; }
+
+    .shortcut-row { display: flex; align-items: center; gap: 6px; }
+    .shortcut-label { font-size: 11px; color: rgba(255,255,255,0.5); width: 70px; }
+    .shortcut-input {
+      flex: 1; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
+      color: #ffd966; padding: 4px 6px; border-radius: 6px; font-size: 11px;
+      text-align: center; outline: none; font-family: monospace; cursor: pointer;
+    }
+    .shortcut-input.recording { border-color: #ff6b6b; background: rgba(255,80,80,0.08); animation: pb 1s infinite; }
+    @keyframes pb { 0%,100% { border-color: rgba(255,107,107,0.5); } 50% { border-color: rgba(255,107,107,1); } }
+    .shortcut-btn {
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.7); padding: 4px 8px; border-radius: 5px;
+      font-size: 11px; cursor: pointer; font-family: inherit; white-space: nowrap;
+    }
+    .shortcut-btn:hover { background: rgba(255,217,102,0.12); color: #ffd966; }
+    .shortcut-btn.recording { background: rgba(255,80,80,0.2); border-color: rgba(255,80,80,0.4); color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <div id="modeOverlay"></div>
+  <div id="interactionLayer"></div>
+  <canvas id="measureCanvas"></canvas>
+
+  <!-- 放大镜 -->
+  <canvas id="magnifier" width="200" height="200" style="display:none; position:fixed; z-index:10001; pointer-events:none; border:2px solid rgba(255,217,102,0.6); border-radius:50%; box-shadow:0 4px 20px rgba(0,0,0,0.5);"></canvas>
+
+  <div class="floating-panel" id="floatingPanel">
+    <div class="panel-header" id="panelHeader">
+      <span class="panel-title">📏 WT屏幕像素测距 <span id="appVersion" style="font-size:9px;color:rgba(255,255,255,0.4);font-weight:400;">v1.9.2</span></span>
+      <div class="win-controls">
+        <span id="trainIndicator" data-i18n-title="trainStatus" title="训练状态: 空闲 | 样本 0/1500" style="display:inline-flex;align-items:center;font-size:13px;opacity:0.6;cursor:default;">🧠</span>
+        <span id="updateIndicator" data-i18n-title="updateAvailable" title="发现新版本，点击查看" style="display:none;position:relative;cursor:pointer;">
+          <button class="win-btn" style="color:#ff4d4f;">🔄</button>
+          <span style="position:absolute;top:0;right:0;width:9px;height:9px;background:#ff4d4f;border-radius:50%;box-shadow:0 0 8px 2px rgba(255,77,79,0.85);"></span>
+        </span>
+        <span style="position:relative;display:inline-flex;">
+          <button class="win-btn" id="btnGamepad" data-i18n-title="kook" title="开黑社区">🎮</button>
+          <div id="gamepadPop" style="display:none;position:absolute;top:30px;right:0;width:180px;background:rgba(20,20,30,0.97);border:1px solid rgba(0,217,255,0.3);border-radius:12px;padding:12px;z-index:300;text-align:center;">
+            <div style="font-size:12px;color:#00d9ff;margin-bottom:8px;">🎮 KOOK 开黑社区</div>
+            <img src="kook_qr.png" style="width:110px;height:110px;border-radius:8px;margin:0 auto 8px;display:block;" onerror="this.style.display='none'">
+            <a id="kookLink" href="https://kook.vip/2CDSmt" target="_blank" rel="noopener" style="display:block;font-size:11px;color:#ffd966;text-decoration:underline;margin-bottom:6px;">https://kook.vip/2CDSmt</a>
+            <button class="btn" id="btnOpenKook" style="width:100%;padding:4px;font-size:10px;">打开链接</button>
+          </div>
+        </span>
+        <span style="position:relative;display:inline-flex;">
+          <button class="win-btn" id="btnPlayerSearch" data-i18n-title="playerSearch" title="Statshark 玩家查询" style="background:rgba(255,170,0,0.15);color:#ffaa00;">🔍</button>
+        </span>
+        <button class="win-btn" id="btnGitHub" data-i18n-title="github" title="GitHub 仓库" style="display:inline-flex;align-items:center;justify-content:center;">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        </button>
+        <button class="win-btn" id="btnNotice" data-i18n-title="notice" title="公告栏">📢</button>
+        <button class="win-btn" id="btnSettings" data-i18n-title="settings" title="设置">⚙</button>
+        <button class="win-btn" id="btnMin" data-i18n-title="minimize" title="最小化">─</button>
+        <button class="win-btn close-btn" id="btnClose" data-i18n-title="close" title="关闭">✕</button>
+      </div>
+    </div>
+    <!-- 安装公告面板 -->
+    <div id="noticePanel" class="drawer" style="visibility:hidden;transform:translate(-130%,-50%);position:fixed;left:12px;top:50%;width:300px;max-height:82vh;overflow-y:auto;background:rgba(20,20,30,0.97);border:1px solid rgba(255,217,102,0.25);border-radius:14px;padding:14px;z-index:400;transition:transform 0.25s ease,visibility 0.25s;">
+      <button class="drawer-close" data-close="noticePanel" title="关闭">✕</button>
+      <div style="font-size:12px;color:#ffd966;margin-bottom:6px;">📢 公告栏</div>
+      <!-- 温馨提示：支持作者（点击进入语音开黑） -->
+      <div id="tipSupport" title="进入 KOOK 语音开黑" style="margin-bottom:6px;background:rgba(255,217,102,0.08);border:1px solid rgba(255,217,102,0.3);border-radius:8px;padding:6px 9px;cursor:pointer;text-align:center;user-select:none;">
+        <span style="font-size:10px;color:#ffd966;">💛 一起开黑就是对作者最大的支持</span>
+      </div>
+      <!-- 开发者公告板块（可点击展开/收起，位于顶部） -->
+      <div id="openSourceBlock" style="margin-bottom:6px;">
+        <div id="openSourceHeader" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;background:rgba(0,217,138,0.08);border:1px solid rgba(0,217,138,0.3);border-radius:8px;padding:5px 9px;">
+          <span style="font-size:11px;color:#00d98a;font-weight:600;">🔓 开发者公告</span>
+          <span id="openSourceArrow" style="font-size:10px;color:#00d98a;">▾</span>
+        </div>
+        <div id="openSourceBody" style="display:none;margin-top:4px;">
+          <!-- 开源声明（警惕盈利为目的） -->
+          <div style="background:rgba(255,80,80,0.06);border:1px solid rgba(255,80,80,0.3);border-radius:8px;padding:6px 8px;margin-bottom:4px;">
+            <div style="font-size:10px;color:#ff6b6b;margin-bottom:3px;font-weight:600;">⚠ 开源与盈利警告</div>
+            <div style="font-size:9px;color:rgba(255,255,255,0.75);line-height:1.7;">
+              <b style="color:#ff6b6b;">⚠ 警惕以盈利为目的使用本软件！</b>本软件完全免费、永久开源，不收取任何费用。<br>
+              <b style="color:#ffd966;">禁止</b>任何形式的<b style="color:#ff6b6b;">商业转售、二次收费、捆绑付费、出租售卖、收徒收费</b>等盈利行为，违者将<b style="color:#ff6b6b;">依法追究法律责任</b>。<br>
+              遵循 <b style="color:#00d98a;">GPL-3.0</b> 开源协议。您可自由使用、学习、二次开发与分发，但<b style="color:#ff6b6b;">严禁用于任何盈利目的</b>。
+            </div>
+          </div>
+          <!-- 技术框架 -->
+          <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:6px 8px;margin-bottom:4px;">
+            <div style="font-size:10px;color:#ffd966;margin-bottom:4px;font-weight:600;">🏗 技术框架</div>
+            <div style="font-size:9px;color:rgba(255,255,255,0.65);line-height:1.7;">
+              <div style="display:flex;justify-content:space-between;"><span>桌面框架</span><span style="color:rgba(255,255,255,0.4);">Electron 43</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>界面引擎</span><span style="color:rgba(255,255,255,0.4);">HTML5 Canvas + CSS3</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>视觉识别</span><span style="color:rgba(255,255,255,0.4);">OpenCV DNN + YOLOv5 ONNX</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>屏幕捕获</span><span style="color:rgba(255,255,255,0.4);">MSS（DXcam 可选）</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>模型训练</span><span style="color:rgba(255,255,255,0.4);">Ultralytics YOLOv8</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>语音合成</span><span style="color:rgba(255,255,255,0.4);">Microsoft edge-tts</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>打包分发</span><span style="color:rgba(255,255,255,0.4);">PyInstaller + 7z SFX</span></div>
+            </div>
+          </div>
+          <!-- 开源依赖 -->
+          <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:6px 8px;">
+            <div style="font-size:10px;color:#ffd966;margin-bottom:4px;font-weight:600;">📦 开源依赖</div>
+            <div style="font-size:9px;color:rgba(255,255,255,0.65);line-height:1.7;">
+              <div style="display:flex;justify-content:space-between;"><span>识别模型训练数据</span><span style="color:rgba(255,255,255,0.4);">WarThunder Yellow Mark Rangefinder</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>检测架构</span><span style="color:rgba(255,255,255,0.4);">Ultralytics YOLOv5/v8 (GPL-3.0)</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>核心依赖</span><span style="color:rgba(255,255,255,0.4);">OpenCV · NumPy · MSS · edge-tts</span></div>
+            </div>
+            <div style="font-size:8px;color:rgba(255,255,255,0.3);margin-top:4px;text-align:center;">感谢以上开源社区贡献</div>
+          </div>
+          <!-- GPL-3.0 协议全文 -->
+          <div id="gplBlock" style="margin-top:4px;">
+            <div id="gplHeader" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:5px 9px;">
+              <span style="font-size:10px;color:#ffd966;font-weight:600;">📄 GPL-3.0 协议全文</span>
+              <span id="gplArrow" style="font-size:10px;color:#ffd966;">▾</span>
+            </div>
+            <div id="gplBody" style="display:none;margin-top:4px;max-height:180px;overflow-y:auto;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:8px;">
+              <pre style="font-size:8px;color:rgba(255,255,255,0.55);line-height:1.45;white-space:pre-wrap;word-break:break-word;margin:0;font-family:Consolas,Monaco,monospace;">GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc. &lt;https://fsf.org/&gt;
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+
+Preamble
+
+The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+
+The licenses for most software and other practical works are designed
+to take away your freedom to share and change the works. By contrast,
+the GNU General Public License is intended to guarantee your freedom to
+share and change all versions of a program--to make sure it remains free
+software for all its users. We, the Free Software Foundation, use the
+GNU General Public License for most of our software; it applies also to
+any other work released this way by its authors. You can apply it to
+your programs, too.
+
+When we speak of free software, we are referring to freedom, not
+price. Our General Public Licenses are designed to make sure that you
+have the freedom to distribute copies of free software (and charge for
+them if you wish), that you receive source code or can get it if you
+want it, that you can change the software or use pieces of it in new
+free programs, and that you know you can do these things.
+
+To protect your rights, we need to prevent others from denying you
+these rights or asking you to surrender the rights. Therefore, you have
+certain responsibilities if you distribute copies of the software, or if
+you modify it: responsibilities to respect the freedom of others.
+
+For example, if you distribute copies of such a program, whether
+gratis or for a fee, you must pass on to the recipients the same
+freedoms that you received. You must make sure that they, too, receive
+or can get the source code. And you must show them these terms so they
+know their rights.
+
+Developers that use the GNU GPL protect your rights with two steps:
+(1) assert copyright on the software, and (2) offer you this License
+giving you legal permission to copy, distribute and/or modify it.
+
+For the developers&#x27; and authors&#x27; protection, the GPL clearly explains
+that there is no warranty for this free software. For both users&#x27; and
+authors&#x27; sake, the GPL requires that modified versions be marked as
+changed, so that their problems will not be attributed erroneously to
+authors of previous versions.
+
+Some devices are designed to deny users access to install or run
+modified versions of the software inside them, although the manufacturer
+can do so. This is fundamentally incompatible with the aim of
+protecting users&#x27; freedom to change the software. The systematic
+pattern of such abuse occurs in the area of products for individuals to
+use, which is precisely where it is most unacceptable. Therefore, we
+have designed this version of the GPL to prohibit the practice for those
+products. If such problems arise substantially in other domains, we
+stand ready to extend this provision to those domains in future versions
+of the GPL, as needed to protect the freedom of users.
+
+Finally, every program is threatened constantly by software patents.
+States should not allow patents to restrict development and use of
+software on general-purpose computers, but in those that do, we wish to
+avoid the special danger that patents applied to a free program could
+make it effectively proprietary. To prevent this, the GPL assures that
+patents cannot be used to render the program non-free.
+
+The precise terms and conditions for copying, distribution and
+modification follow.
+
+TERMS AND CONDITIONS
+
+0. Definitions.
+
+&quot;This License&quot; refers to version 3 of the GNU General Public License.
+
+&quot;Copyright&quot; also means copyright-like laws that apply to other kinds of
+works, such as semiconductor masks.
+
+&quot;The Program&quot; refers to any copyrightable work licensed under this
+License. Each licensee is addressed as &quot;you&quot;. &quot;Licensees&quot; and
+&quot;recipients&quot; may be individuals or organizations.
+
+To &quot;modify&quot; a work means to copy from or adapt all or part of the work
+in a fashion requiring copyright permission, other than the making of an
+exact copy. The resulting work is called a &quot;modified version&quot; of the
+earlier work or a work &quot;based on&quot; the earlier work.
+
+A &quot;covered work&quot; means either the unmodified Program or a work based
+on the Program.
+
+To &quot;propagate&quot; a work means to do anything with it that, without
+permission, would make you directly or secondarily liable for
+infringement under applicable copyright law, except executing it on a
+computer or modifying a private copy. Propagation includes copying,
+distribution (with or without modification), making available to the
+public, and in some countries other activities as well.
+
+To &quot;convey&quot; a work means any kind of propagation that enables other
+parties to make or receive copies. Mere interaction with a user through
+a computer network, with no transfer of a copy, is not conveying.
+
+An interactive user interface displays &quot;Appropriate Legal Notices&quot;
+to the extent that it includes a convenient and prominently visible
+feature that (1) displays an appropriate copyright notice, and (2)
+tells the user that there is no warranty for the work (except to the
+extent that warranties are provided), that licensees may convey the
+work under this License, and how to view a copy of this License. If
+the interface presents a list of user commands or options, such as a
+menu, a prominent item in the list meets this criterion.
+
+1. Source Code.
+
+The &quot;source code&quot; for a work means the preferred form of the work
+for making modifications to it. &quot;Object code&quot; means any non-source
+form of a work.
+
+A &quot;Standard Interface&quot; means an interface that either is an official
+standard defined by a recognized standards body, or, in the case of
+interfaces specified for a particular programming language, one that
+is widely used among developers working in that language.
+
+The &quot;System Libraries&quot; of an executable work include anything, other
+than the work as a whole, that (a) is included in the normal form of
+packaging a Major Component, but which is not part of that Major
+Component, and (b) serves only to enable use of the work with that
+Major Component, or to implement a Standard Interface for which an
+implementation is available to the public in source code form. A
+&quot;Major Component&quot;, in this context, means a major essential component
+(kernel, window system, and so on) of the specific operating system
+(if any) on which the executable work runs, or a compiler used to
+produce the work, or an object code interpreter used to run it.
+
+The &quot;Corresponding Source&quot; for a work in object code form means all
+the source code needed to generate, install, and (for an executable
+work) run the object code and to modify the work, including scripts to
+control those activities. However, it does not include the work&#x27;s
+System Libraries, or general-purpose tools or generally available free
+programs which are used unmodified in performing those activities but
+which are not part of the work. For example, Corresponding Source
+includes interface definition files associated with source files for
+the work, and the source code for shared libraries and dynamically
+linked subprograms that the work is specifically designed to require,
+such as by intimate data communication or control flow between those
+subprograms and other parts of the work.
+
+The Corresponding Source need not include anything that users
+can regenerate automatically from other parts of the Corresponding
+Source.
+
+The Corresponding Source for a work in source code form is that
+same work.
+
+2. Basic Permissions.
+
+All rights granted under this License are granted for the term of
+copyright on the Program, and are irrevocable provided the stated
+conditions are met. This License explicitly affirms your unlimited
+permission to run the unmodified Program. The output from running a
+covered work is covered by this License only if the output, given its
+content, constitutes a covered work. This License acknowledges your
+rights of fair use or other equivalent, as provided by copyright law.
+
+You may make, run and propagate covered works that you do not
+convey, without conditions so long as your license otherwise remains
+in force. You may convey covered works to others for the sole purpose
+of having them make modifications exclusively for you, or provide you
+with facilities for running those works, provided that you comply with
+the terms of this License in conveying all material for which you do
+not control copyright. Those thus making or running the covered works
+for you must do so exclusively on your behalf, under your direction
+and control, on terms that prohibit them from making any copies of
+your copyrighted material outside their relationship with you.
+
+Conveying under any other circumstances is permitted solely under
+the conditions stated below. Sublicensing is not allowed; section 10
+makes it unnecessary.
+
+3. Protecting Users&#x27; Legal Rights From Anti-Circumvention Law.
+
+No covered work shall be deemed part of an effective technological
+measure under any applicable law fulfilling obligations under article
+11 of the WIPO copyright treaty adopted on 20 December 1996, or
+similar laws prohibiting or restricting circumvention of such
+measures.
+
+When you convey a covered work, you waive any legal power to forbid
+circumvention of technological measures to the extent such circumvention
+is effected by exercising rights under this License with respect to the
+covered work, and you disclaim any intention to limit operation or
+modification of the work as a means of enforcing, against the work&#x27;s
+users, your or third parties&#x27; legal rights to forbid circumvention of
+technological measures.
+
+4. Conveying Verbatim Copies.
+
+You may convey verbatim copies of the Program&#x27;s source code as you
+receive it, in any medium, provided that you conspicuously and
+appropriately publish on each copy an appropriate copyright notice;
+keep intact all notices stating that this License and any
+non-permissive terms added in accord with section 7 apply to the code;
+keep intact all notices of the absence of any warranty; and give all
+recipients a copy of this License along with the Program.
+
+You may charge any price or no price for each copy that you convey,
+and you may offer support or warranty protection for a fee.
+
+5. Conveying Modified Source Versions.
+
+You may convey a work based on the Program, or the modifications to
+produce it from the Program, in the form of source code under the
+terms of section 4, provided that you also meet all of these conditions:
+
+a) The work must carry prominent notices stating that you modified
+it, and giving a relevant date.
+
+b) The work must carry prominent notices stating that it is
+released under this License and any conditions added under section
+7. This requirement modifies the requirement in section 4 to
+&quot;keep intact all notices&quot;.
+
+c) You must license the entire work, as a whole, under this
+License to anyone who comes into possession of a copy. This
+License will therefore apply, along with any applicable section 7
+additional terms, to the whole of the work, and all its parts,
+regardless of how they are packaged. This License gives no
+permission to license the work in any other way, but it does not
+invalidate such permission if you have separately received it.
+
+d) If the work has interactive user interfaces, each must display
+Appropriate Legal Notices; however, if the Program has interactive
+interfaces that do not display Appropriate Legal Notices, your
+work need not make them do so.
+
+A compilation of a covered work with other separate and independent
+works, which are not by their nature extensions of the covered work,
+and which are not combined with it such as to form a larger program,
+in or on a volume of a storage or distribution medium, is called an
+&quot;aggregate&quot; if the compilation and its resulting copyright are not
+used to limit the access or legal rights of the compilation&#x27;s users
+beyond what the individual works permit. Inclusion of a covered work
+in an aggregate does not cause this License to apply to the other
+parts of the aggregate.
+
+6. Conveying Non-Source Forms.
+
+You may convey a covered work in object code form under the terms
+of sections 4 and 5, provided that you also convey the
+machine-readable Corresponding Source under the terms of this License,
+in one of these ways:
+
+a) Convey the object code in, or embodied in, a physical product
+(including a physical distribution medium), accompanied by the
+Corresponding Source fixed on a durable physical medium
+customarily used for software interchange.
+
+b) Convey the object code in, or embodied in, a physical product
+(including a physical distribution medium), accompanied by a
+written offer, valid for at least three years and valid for as
+long as you offer spare parts or customer support for that product
+model, to give anyone who possesses the object code either (1) a
+copy of the Corresponding Source for all the software in the
+product that is covered by this License, on a durable physical
+medium customarily used for software interchange, for a price no
+more than your reasonable cost of physically performing this
+conveying of source, or (2) access to copy the
+Corresponding Source from a network server at no charge.
+
+c) Convey individual copies of the object code with a copy of the
+written offer to provide the Corresponding Source. This
+alternative is allowed only occasionally and noncommercially, and
+only if you received the object code with such an offer, in accord
+with subsection 6b.
+
+d) Convey the object code by offering access from a designated
+place (gratis or for a charge), and offer equivalent access to the
+Corresponding Source in the same way through the same place at no
+further charge. You need not require recipients to copy the
+Corresponding Source along with the object code. If the place to
+copy the object code is a network server, the Corresponding Source
+may be on a different server (operated by you or a third party)
+that supports equivalent copying facilities, provided you maintain
+clear directions next to the object code saying where to find the
+Corresponding Source. Regardless of what server hosts the
+Corresponding Source, you remain obligated to ensure that it is
+available for as long as needed to satisfy these requirements.
+
+e) Convey the object code using peer-to-peer transmission, provided
+you inform other peers where the object code and Corresponding
+Source of the work are being offered to the general public at no
+charge under subsection 6d.
+
+A separable portion of the object code, whose source code is excluded
+from the Corresponding Source as a System Library, need not be
+included in conveying the object code work.
+
+A &quot;User Product&quot; is either (1) a &quot;consumer product&quot;, which means any
+tangible personal property which is normally used for personal, family,
+or household purposes, or (2) anything designed or sold for incorporation
+into a dwelling. In determining whether a product is a consumer product,
+doubtful cases shall be resolved in favor of coverage. For a particular
+product received by a particular user, &quot;normally used&quot; refers to a
+typical or common use of that class of product, regardless of the status
+of the particular user or of the way in which the particular user
+actually uses, or expects or is expected to use, the product. A product
+is a consumer product regardless of whether the product has substantial
+commercial, industrial or non-consumer uses, unless such uses represent
+the only significant mode of use of the product.
+
+&quot;Installation Information&quot; for a User Product means any methods,
+procedures, authorization keys, or other information required to install
+and execute modified versions of a covered work in that User Product from
+a modified version of its Corresponding Source. The information must
+suffice to ensure that the continued functioning of the modified object
+code is in no case prevented or interfered with solely because
+modification has been made.
+
+If you convey an object code work under this section in, or with, or
+specifically for use in, a User Product, and the conveying occurs as
+part of a transaction in which the right of possession and use of the
+User Product is transferred to the recipient in perpetuity or for a
+fixed term (regardless of how the transaction is characterized), the
+Corresponding Source conveyed under this section must be accompanied
+by the Installation Information. But this requirement does not apply
+if neither you nor any third party retains the ability to install
+modified object code on the User Product (for example, the work has
+been installed in ROM).
+
+The requirement to provide Installation Information does not include a
+requirement to continue to provide support service, warranty, or updates
+for a work that has been modified or installed by the recipient, or for
+the User Product in which it has been modified or installed. Access to a
+network may be denied when the modification itself materially and
+adversely affects the operation of the network or violates the rules and
+protocols for communication across the network.
+
+Corresponding Source conveyed, and Installation Information provided,
+in accord with this section must be in a format that is publicly
+documented (and with an implementation available to the public in
+source code form), and must require no special password or key for
+unpacking, reading or copying.
+
+7. Additional Terms.
+
+&quot;Additional permissions&quot; are terms that supplement the terms of this
+License by making exceptions from one or more of its conditions.
+Additional permissions that are applicable to the entire Program shall
+be treated as though they were included in this License, to the extent
+that they are valid under applicable law. If additional permissions
+apply only to part of the Program, that part may be used separately
+under those permissions, but the entire Program remains governed by
+this License without regard to the additional permissions.
+
+When you convey a copy of a covered work, you may at your option
+remove any additional permissions from that copy, or from any part of
+it. (Additional permissions may be written to require their own
+removal in certain cases when you modify the work.) You may place
+additional permissions on material, added by you to a covered work,
+for which you have or can give appropriate copyright permission.
+
+Notwithstanding any other provision of this License, for material you
+add to a covered work, you may (if authorized by the copyright holders of
+that material) supplement the terms of this License with terms:
+
+a) Disclaiming warranty or limiting liability differently from the
+terms of sections 15 and 16 of this License; or
+
+b) Requiring preservation of specified reasonable legal notices or
+author attributions in that material or in the Appropriate Legal
+Notices displayed by works containing it; or
+
+c) Prohibiting misrepresentation of the origin of that material, or
+requiring that modified versions of such material be marked in
+reasonable ways as different from the original version; or
+
+d) Limiting the use for publicity purposes of names of licensors or
+authors of the material; or
+
+e) Declining to grant rights under trademark law for use of some
+trade names, trademarks, or service marks; or
+
+f) Requiring indemnification of licensors and authors of that
+material by anyone who conveys the material (or modified versions of
+it) with contractual assumptions of liability to the recipient, for
+any liability that these contractual assumptions directly impose on
+those licensors and authors.
+
+All other non-permissive additional terms are considered &quot;further
+restrictions&quot; within the meaning of section 10. If the Program as you
+received it, or any part of it, contains a notice stating that it is
+governed by this License along with a term that is a further
+restriction, you may remove that term. If a license document contains
+a further restriction but permits relicensing or conveying under this
+License, you may add to a covered work material governed by the terms
+of that license document, provided that the further restriction does
+not survive such relicensing or conveying.
+
+If you add terms to a covered work in accord with this section, you
+must place, in the relevant source files, a statement of the
+additional terms that apply to those files, or a notice indicating
+where to find the applicable terms.
+
+Additional terms, permissive or non-permissive, may be stated in the
+form of a separately written license, or stated as exceptions;
+the above requirements apply either way.
+
+8. Termination.
+
+You may not propagate or modify a covered work except as expressly
+provided under this License. Any attempt otherwise to propagate or
+modify it is void, and will automatically terminate your rights under
+this License (including any patent licenses granted under the third
+paragraph of section 11).
+
+However, if you cease all violation of this License, then your
+license from a particular copyright holder is reinstated (a)
+provisionally, unless and until the copyright holder explicitly and
+finally terminates your license, and (b) permanently, if the copyright
+holder fails to notify you of the violation by some reasonable means
+prior to 60 days after the cessation.
+
+Moreover, your license from a particular copyright holder is
+reinstated permanently if the copyright holder notifies you of the
+violation by some reasonable means, this is the first time you have
+received notice of violation of this License (for any work) from that
+copyright holder, and you cure the violation prior to 30 days after
+your receipt of the notice.
+
+Termination of your rights under this section does not terminate the
+licenses of parties who have received copies or rights from you under
+this License. If your rights have been terminated and not permanently
+reinstated, you do not qualify to receive new licenses for the same
+material under section 10.
+
+9. Acceptance Not Required for Having Copies.
+
+You are not required to accept this License in order to receive or
+run a copy of the Program. Ancillary propagation of a covered work
+occurring solely as a consequence of using peer-to-peer transmission
+to receive a copy likewise does not require acceptance. However,
+nothing other than this License grants you permission to propagate or
+modify any covered work. These actions infringe copyright if you do
+not accept this License. Therefore, by modifying or propagating a
+covered work, you indicate your acceptance of this License to do so.
+
+10. Automatic Licensing of Downstream Recipients.
+
+Each time you convey a covered work, the recipient automatically
+receives a license from the original licensors, to run, modify and
+propagate that work, subject to this License. You are not responsible
+for enforcing compliance by third parties with this License.
+
+An &quot;entity transaction&quot; is a transaction transferring control of an
+organization, or substantially all assets of one, or subdividing an
+organization, or merging organizations. If propagation of a covered
+work results from an entity transaction, each party to that
+transaction who receives a copy of the work also receives whatever
+licenses to the work the party&#x27;s predecessor in interest had or could
+give under the previous paragraph, plus a right to possession of the
+Corresponding Source of the work from the predecessor in interest, if
+the predecessor has it or can get it with reasonable efforts.
+
+You may not impose any further restrictions on the exercise of the
+rights granted or affirmed under this License. For example, you may
+not impose a license fee, royalty, or other charge for exercise of
+rights granted under this License, and you may not initiate litigation
+(including a cross-claim or counterclaim in a lawsuit) alleging that
+any patent claim is infringed by making, using, selling, offering for
+sale, or importing the Program or any portion of it.
+
+11. Patents.
+
+A &quot;contributor&quot; is a copyright holder who authorizes use under this
+License of the Program or a work on which the Program is based. The
+work thus licensed is called the contributor&#x27;s &quot;contributor version&quot;.
+
+A contributor&#x27;s &quot;essential patent claims&quot; are all patent claims
+owned or controlled by the contributor, whether already acquired or
+hereafter acquired, that would be infringed by some manner, permitted
+by this License, of making, using, or selling its contributor version,
+but do not include claims that would be infringed only as a
+consequence of further modification of the contributor version. For
+purposes of this definition, &quot;control&quot; includes the right to grant
+patent sublicenses in a manner consistent with the requirements of
+this License.
+
+Each contributor grants you a non-exclusive, worldwide, royalty-free
+patent license under the contributor&#x27;s essential patent claims, to
+make, use, sell, offer for sale, import and otherwise run, modify and
+propagate the contents of its contributor version.
+
+In the following three paragraphs, a &quot;patent license&quot; is any express
+agreement or commitment, however denominated, not to enforce a patent
+(such as an express permission to practice a patent or covenant not to
+sue for patent infringement). To &quot;grant&quot; such a patent license to a
+party means to make such an agreement or commitment not to enforce a
+patent against the party.
+
+If you convey a covered work, knowingly relying on a patent license,
+and the Corresponding Source of the work is not available for anyone
+to copy, free of charge and under the terms of this License, through a
+publicly available network server or other readily accessible means,
+then you must either (1) cause the Corresponding Source to be so
+available, or (2) arrange to deprive yourself of the benefit of the
+patent license for this particular work, or (3) arrange, in a manner
+consistent with the requirements of this License, to extend the patent
+license to downstream recipients. &quot;Knowingly relying&quot; means you have
+actual knowledge that, but for the patent license, your conveying the
+covered work in a country, or your recipient&#x27;s use of the covered work
+in a country, would infringe one or more identifiable patents in that
+country that you have reason to believe are valid.
+
+If, pursuant to or in connection with a single transaction or
+arrangement, you convey, or propagate by procuring conveyance of, a
+covered work, and grant a patent license to some of the parties
+receiving the covered work authorizing them to use, propagate, modify
+or convey a specific copy of the covered work, then the patent license
+you grant is automatically extended to all recipients of the covered
+work and works based on it.
+
+A patent license is &quot;discriminatory&quot; if it does not include within
+the scope of its coverage, prohibits the exercise of, or is
+conditioned on the non-exercise of one or more of the rights that are
+specifically granted under this License. You may not convey a covered
+work if you are a party to an arrangement with a third party that is
+in the business of distributing software, under which you make payment
+to the third party based on the extent of your activity of conveying
+the work, and under which the third party grants, to any of the
+parties who would receive the covered work from you, a discriminatory
+patent license (a) in connection with copies of the covered work
+conveyed by you (or copies made from those copies), or (b) primarily
+for and in connection with specific products or compilations that
+contain the covered work, unless you entered into that arrangement,
+or that patent license was granted, prior to 28 March 2007.
+
+Nothing in this License shall be construed as excluding or limiting
+any implied license or other defenses to infringement that may
+otherwise be available to you under applicable patent law.
+
+12. No Surrender of Others&#x27; Freedom.
+
+If conditions are imposed on you (whether by court order, agreement or
+otherwise) that contradict the conditions of this License, they do not
+excuse you from the conditions of this License. If you cannot convey a
+covered work so as to satisfy simultaneously your obligations under this
+License and any other pertinent obligations, then as a consequence you may
+not convey it at all. For example, if you agree to terms that obligate you
+to collect a royalty for further conveying from those to whom you convey
+the Program, the only way you could satisfy both those terms and this
+License would be to refrain entirely from conveying the Program.
+
+13. Use with the GNU Affero General Public License.
+
+Notwithstanding any other provision of this License, you have
+permission to link or combine any covered work with a work licensed
+under version 3 of the GNU Affero General Public License into a single
+combined work, and to convey the resulting work. The terms of this
+License will continue to apply to the part which is the covered work,
+but the special requirements of the GNU Affero General Public License,
+section 13, concerning interaction through a network will apply to the
+combination as such.
+
+14. Revised Versions of this License.
+
+The Free Software Foundation may publish revised and/or new versions of
+the GNU General Public License from time to time. Such new versions will
+be similar in spirit to the present version, but may differ in detail to
+address new problems or concerns.
+
+Each version is given a distinguishing version number. If the
+Program specifies that a certain numbered version of the GNU General
+Public License &quot;or any later version&quot; applies to it, you have the
+option of following the terms and conditions either of that numbered
+version or of any later version published by the Free Software
+Foundation. If the Program does not specify a version number of the
+GNU General Public License, you may choose any version ever published
+by the Free Software Foundation.
+
+If the Program specifies that a proxy can decide which future
+versions of the GNU General Public License can be used, that proxy&#x27;s
+public statement of acceptance of a version permanently authorizes you
+to choose that version for the Program.
+
+Later license versions may give you additional or different
+permissions. However, no additional obligations are imposed on any
+author or copyright holder as a result of your choosing to follow a
+later version.
+
+15. Disclaimer of Warranty.
+
+THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
+APPLICABLE LAW. EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
+HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM &quot;AS IS&quot; WITHOUT WARRANTY
+OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM
+IS WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF
+ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+
+16. Limitation of Liability.
+
+IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
+WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
+THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
+GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
+USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
+DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
+PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
+EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGES.
+
+17. Interpretation of Sections 15 and 16.
+
+If the disclaimer of warranty and limitation of liability provided
+above cannot be given local legal effect according to their terms,
+reviewing courts shall apply local law that most closely approximates
+an absolute waiver of all civil liability in connection with the
+Program, unless a warranty or assumption of liability accompanies a
+copy of the Program in return for a fee.
+
+END OF TERMS AND CONDITIONS
+
+How to Apply These Terms to Your New Programs
+
+If you develop a new program, and you want it to be of the greatest
+possible use to the public, the best way to achieve this is to make it
+free software which everyone can redistribute and change under these terms.
+
+To do so, attach the following notices to the program. It is safest
+to attach them to the start of each source file to most effectively
+state the exclusion of warranty; and each file should have at least
+the &quot;copyright&quot; line and a pointer to where the full notice is found.
+
+&lt;one line to give the program&#x27;s name and a brief idea of what it does.&gt;
+Copyright (C) &lt;year&gt;  &lt;name of author&gt;
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see &lt;https://www.gnu.org/licenses/&gt;.
+
+Also add information on how to contact you by electronic and paper mail.
+
+If the program does terminal interaction, make it output a short
+notice like this when it starts in an interactive mode:
+
+&lt;program&gt;  Copyright (C) &lt;year&gt;  &lt;name of author&gt;
+This program comes with ABSOLUTELY NO WARRANTY; for details type `show w&#x27;.
+This is free software, and you are welcome to redistribute it
+under certain conditions; type `show c&#x27; for details.
+
+The hypothetical commands `show w&#x27; and `show c&#x27; should show the appropriate
+parts of the General Public License. Of course, your program&#x27;s commands
+might be different; for a GUI interface, you would use an &quot;about box&quot;.
+
+You should also get your employer (if you work as a programmer) or school,
+if any, to sign a &quot;copyright disclaimer&quot; for the program, if necessary.
+For more information on this, and how to apply and follow the GNU GPL, see
+&lt;https://www.gnu.org/licenses/&gt;.
+
+The GNU General Public License does not permit incorporating your program
+into proprietary programs. If your program is a subroutine library, you
+may consider it more useful to permit linking proprietary applications with
+the library. If this is what you want to do, use the GNU Lesser General
+Public License instead of this License. But first, please read
+&lt;https://www.gnu.org/licenses/why-not-lgpl.html&gt;.</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="noticeContent" style="font-size:11px;color:rgba(255,255,255,0.75);line-height:1.6;max-height:140px;overflow-y:auto;">
+        <span style="color:#ffd966;">【v1.9.2 更新 - 2026.08.14】</span>🐱 GitHub开源仓库按钮 · 🌐 中英文UI切换 · 🔄 检查更新修复(修复证书"检查失败") · 📜 首次使用协议(免费开源+严禁盈利警告) · 🔓 开发者公告板块(GPL-3.0协议全文) · 📦 安装包+绿色版压缩包发布GitHub · 🔍 DPI缩放+多显示器对齐 · 🧠 训练进度条修复 · 📈 训练回退根因修复 · ♾ 增量训练持久化 · 🛡 F1不劣化保护 · 📁 采集样本持久化 · ⏸ 训练自动暂停/恢复采集 · 🖱 框选批量勾选+滚轮+大图预览 · 🧹 移除AI视野 · ⚡ 内存优化<br><span style="color:#ffd966;">【v1.9.0 更新 - 2026.08.13】</span>🧠 训练进度条+回退样本✕标记 · 🗂 临时文件统一目录 · 🔍 玩家查询内嵌窗口 · 🖱 修复按钮点击/最小化恢复/停止识别进程残留 · 🗑 删除样本入回收站+打开文件夹 · 📂 训练污染目录修复<br><span style="color:#00d9ff;">【v1.8.1 更新】</span>⚡ 流畅度优化：100ms节流+500ms缓存减少30%IPC · 🐛 修复吸附测量值消失/按钮无法点击/搜索窗口 · 📦 完整安装包1482MB<br><span style="color:#00d9ff;">【v1.8.0 更新】</span>🎯 样本筛选双模式(自动/人工挑选) · 📸 AI视野实时缩略图 · ⚡ 响应三倍加速 · 📍 面板吸附悬停滑出 · 🐛 修复中文路径崩溃+采集失效 · 🔧 采集阈值0.15 · 📦 安装包1482MB<br><span style="color:#00d9ff;">【v1.7.0 更新】</span>人工挑选样本训练（提升更大）；边缘吸附+悬停滑出；日志导出合并进日志；单实例防重复打开；更名 WT屏幕像素测距。<br>
+        <span style="color:#00d9ff;">【v1.6.5 更新】训练升级P0-P5(数据增强/伪标签/负样本/冻结微调/多模型融合)；【v1.6.4】</span>识别框架由 YOLOv5 升级为 YOLOv8n，带着 YOLOv5 数据（伪标注真实截图+增强）训练，检出率优于旧版；对比择优保证不降级。<br>
+        <span style="color:#00d9ff;">【v1.6.3 更新】</span>修复训练后AI识别失效（新模型自动校验，无效自动回退旧模型）；日志可导出到桌面txt；版本升级。<br>
+        <span style="color:#00d9ff;">【v1.6.2 更新】</span>修复开始AI识别后无法获取样本的问题（采集置信度阈值降至0.5）；版本升级。<br>
+        <span style="color:#00d9ff;">【v1.6.1 更新】</span>样本采集上限提升至1500（FIFO循环）；训练环境自动检测（内置/系统Python）；训练进度实时反馈+模型热更新；顶部训练状态指示。<br>
+        <span style="color:#00d9ff;">【v1.5.2 更新】</span>截图底层由 mss 升级为 DXcam（高性能低延迟）；新增打包前文件完整性校验；开源同步 Release/README。<br>
+        <span style="color:#00d9ff;">【v1.5.1 更新】</span>修复切屏/测量模式点击问题；设置与公告改为侧滑抽屉；新增 KOOK 开黑入口与文件校验。<br>
+        <span style="color:#00d9ff;">【v1.5.0 更新】</span>本次改动优化 UI 大小，并添加新用户使用指引。<br>
+        欢迎使用像素测距！<br>
+        1. 点"手动框选"拖拽选择识别区域，点"确认区域"生效。<br>
+        2. 点"开始 AI 识别测距"自动识别黄标与箭头并测距。<br>
+        3. ⚙ 设置可换语音包、调透明度、换主题色、改快捷键。<br>
+        4. 面板右下角可拖拽拉伸大小。<br>
+        5. 完全独立版，无需 Python，可放 U 盘或发送。<br>
+        <hr style="border-color:rgba(255,255,255,0.08);margin:10px 0;">
+      </div>
+    </div>
+    <!-- 拉伸把手 -->
+    <div id="resizeHandle" title="拖拽拉伸大小" style="position:absolute;right:2px;bottom:2px;width:16px;height:16px;cursor:nwse-resize;color:rgba(255,255,255,0.4);font-size:12px;line-height:16px;text-align:center;user-select:none;">◢</div>
+    <div class="distance-display" style="min-width:185px;width:auto;height:53px;padding:0 14px;align-items:center;margin-bottom:0;">
+      <span class="label" data-i18n="actualDistance">实际测量值</span>
+      <span id="pixelValue">0</span>
+      <span class="unit">M</span>
+    </div>
+    <div id="trainProgressBar" style="display:none;margin:6px 14px 0;height:16px;background:rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;border:1px solid rgba(255,217,102,0.5);">
+      <div id="trainProgressFill" style="height:100%;width:0%;background:#ffd966;transition:width 0.3s ease;"></div>
+    </div>
+    <div id="trainProgressText" style="display:none;font-size:13px;color:#ffd966;margin:4px 14px 0;text-align:center;">训练中 0%</div>
+    <div class="panel-body">
+      <!-- 设置面板 -->
+      <div id="settingsPanel" class="drawer" style="visibility:hidden;transform:translate(-130%,-50%);position:fixed;left:12px;top:50%;width:300px;max-height:82vh;overflow-y:auto;background:rgba(20,20,30,0.97);border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:14px;z-index:400;transition:transform 0.25s ease,visibility 0.25s;">
+        <button class="drawer-close" data-close="settingsPanel" title="关闭">✕</button>
+        <div data-i18n="settings" style="font-size:12px;color:rgba(255,255,255,0.85);margin-bottom:8px;"> 设置</div>
+        <!-- 语言 -->
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.1);">
+          <span data-i18n="language" style="font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;">语言:</span>
+          <select id="langSelect" style="flex:1;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);color:#ffd966;padding:4px 6px;border-radius:6px;font-size:11px;outline:none;">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <!-- 语音包 -->
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+          <span data-i18n="voice" style="font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;">内置音色:</span>
+          <select id="voiceSelect" style="flex:1;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);color:#00c8ff;padding:4px 6px;border-radius:6px;font-size:10px;outline:none;">
+            <option value="zh-CN-XiaoyiNeural">曼波·晓伊(俏皮女)</option>
+            <option value="zh-CN-XiaoxiaoNeural">晓晓(温柔女)</option>
+            <option value="zh-CN-YunxiNeural">云希(青年男)</option>
+            <option value="zh-CN-YunjianNeural">云健(解说男)</option>
+            <option value="zh-CN-liaoning-XiaobeiNeural">小北(东北口音)</option>
+            <option value="zh-CN-shaanxi-XiaoniNeural">小妮(陕西口音)</option>
+            <option value="zh-CN-YunyangNeural">云扬(新闻男)</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+          <span data-i18n="custom" style="font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;">自定义:</span>
+          <button class="btn" id="btnSelectVoice" data-i18n="changeVoice" style="flex:1;padding:4px 8px;font-size:10px;background:rgba(0,200,255,0.06);border-color:rgba(0,200,255,0.2);color:#00c8ff;">🎵 更换语音包文件</button>
+          <span id="voiceFileName" data-i18n="builtInVoice" style="font-size:10px;color:rgba(255,255,255,0.4);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">用内置音色</span>
+        </div>
+        <!-- 透明度 -->
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+          <span data-i18n="opacity" style="font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;">透明度:</span>
+          <input type="range" id="opacitySlider" min="0.3" max="1" step="0.05" value="0.88" style="flex:1;">
+          <span id="opacityVal" style="font-size:10px;color:rgba(255,255,255,0.5);width:32px;">88%</span>
+        </div>
+        <!-- 主题色 -->
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span data-i18n="theme" style="font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;">主题色:</span>
+          <button class="theme-swatch" data-theme="gold"  style="background:#ffaa00;" title="金"></button>
+          <button class="theme-swatch" data-theme="blue" style="background:#00c8ff;" title="蓝"></button>
+          <button class="theme-swatch" data-theme="green" style="background:#00d98a;" title="绿"></button>
+          <button class="theme-swatch" data-theme="purple" style="background:#b06bff;" title="紫"></button>
+          <button class="theme-swatch" data-theme="red" style="background:#ff5a5a;" title="红"></button>
+        </div>
+        <!-- 快捷键 -->
+        <div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">
+          <div data-i18n="hotkeys" style="font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:6px;">快捷键（点击更改，自动保存）</div>
+          <div class="shortcut-row" style="margin-bottom:5px;">
+            <span class="shortcut-label" data-i18n="exit">退出</span>
+            <input type="text" class="shortcut-input" id="scExit" value="Ctrl+Shift+X" readonly>
+            <button class="shortcut-btn" id="btnScExit" data-i18n="change">更改</button>
+          </div>
+          <div class="shortcut-row" style="margin-bottom:5px;">
+            <span class="shortcut-label" data-i18n="hideShow">隐藏/显示</span>
+            <input type="text" class="shortcut-input" id="scHide" value="Ctrl+Shift+H" readonly>
+            <button class="shortcut-btn" id="btnScHide" data-i18n="change">更改</button>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-label" data-i18n="clearMeasure">清除测量</span>
+            <input type="text" class="shortcut-input" id="scClear" value="Ctrl+Shift+C" readonly>
+            <button class="shortcut-btn" id="btnScClear" data-i18n="change">更改</button>
+          </div>
+        </div>
+        <!-- 文件校验 + 训练AI -->
+        <div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">
+          <div style="display:flex;gap:6px;">
+            <button class="btn" id="btnVerify" data-i18n="verify" style="flex:1;padding:5px;font-size:11px;background:rgba(0,200,100,0.08);border-color:rgba(0,200,100,0.3);color:#00c864;">🔍 文件校验</button>
+            <button class="btn" id="btnTrain" data-i18n="trainAI" style="flex:1;padding:5px;font-size:11px;background:rgba(176,107,255,0.1);border-color:rgba(176,107,255,0.3);color:#b06bff;">🧠 训练AI</button>
+            <button class="btn" id="btnLog" data-i18n="log" style="flex:1;padding:5px;font-size:11px;background:rgba(0,200,255,0.08);border-color:rgba(0,200,255,0.3);color:#00c8ff;">📄 日志</button>
+          </div>
+          <button class="btn" id="btnFilter" data-i18n="autoFilter" style="width:100%;padding:4px;font-size:10px;margin-top:6px;background:rgba(255,200,0,0.08);border-color:rgba(255,200,0,0.3);color:#ffc800;">🤖 自动筛选</button>
+          <div style="display:flex;gap:4px;margin-top:2px;">
+            <button class="btn" id="btnManualPick" data-i18n="manualPick" style="flex:1;padding:4px;font-size:10px;background:rgba(0,255,136,0.08);border-color:rgba(0,255,136,0.25);color:#00ff88;" title="人工挑选高质量样本，AI 训练提升更大">👁 人工挑选（提升更大）</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
+            <span data-i18n="samples" style="font-size:10px;color:rgba(255,255,255,0.5);">已采集样本:</span>
+            <span id="sampleCount" style="font-size:10px;color:#b06bff;">0 / 1500</span>
+            <span id="trainStatus" data-i18n="idle" style="font-size:10px;color:rgba(255,255,255,0.5);margin-left:auto;">空闲</span>
+          </div>
+          <div id="trainEnvHint" style="display:none;font-size:10px;color:#ffaa00;margin-top:4px;">未检测到训练环境。<button class="btn" id="btnInstallEnv" style="padding:2px 8px;font-size:10px;margin-left:4px;">⬇ 安装训练环境</button></div>
+          <div id="verifyResult" style="display:none;font-size:10px;color:rgba(255,255,255,0.7);line-height:1.6;margin-top:6px;max-height:120px;overflow-y:auto;"></div>
+        </div>
+        <!-- 检查更新 -->
+        <div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button class="btn" id="btnCheckUpdate" data-i18n="checkUpdate" style="flex:1;padding:5px;font-size:11px;background:rgba(255,77,79,0.08);border-color:rgba(255,77,79,0.3);color:#ff4d4f;">🔄 检查更新</button>
+            <span id="updateStatus" style="font-size:10px;color:rgba(255,255,255,0.5);">当前 v1.9.2</span>
+          </div>
+        </div>
+      </div>
+      	  
+
+      <!-- 公式隐藏，仅保留计算值在上方显示 -->
+      <div class="formula-box" style="display:none;">
+        <div class="ftitle">d = SQRT(x^2 + y^2) * (地图单格距离 / 测量像素值)</div>
+        <div class="fline">
+          P1: <span class="delta" id="pt1Coord">(0,0)</span> | P2: <span class="delta" id="pt2Coord">(0,0)</span>
+        </div>
+        <div class="fline">
+          d = <span class="sqrt">&#8730;</span>(<span class="delta" id="dxVal">x=0</span><sup>2</sup>+<span class="delta" id="dyVal">y=0</span><sup>2</sup>) &#215; (<span class="delta" id="dAVal">地图单格距离=1</span>/<span class="delta" id="dBVal">测量像素值=1</span>)
+        </div>
+        <div class="fline">= <span class="delta" id="formulaResult">0</span> <span id="convertedUnit">M</span></div>
+      </div>
+
+      <div class="convert-row">
+        <span class="label" data-i18n="gridDistance">地图单格距离(&#215;)</span>
+        <input type="number" id="coefA" value="1" step="0.001" min="0">
+        <span class="label" data-i18n="pixelValueLabel">测量像素值(&#247;)</span>
+        <input type="number" id="coefB" value="1" step="0.001" min="0.000001">
+      </div>
+
+      <div class="mode-row">
+        <button class="mode-btn active" data-mode="line" data-i18n="line">直线</button>
+        <button class="mode-btn" data-mode="horizontal" data-i18n="horizontal">水平</button>
+        <button class="mode-btn" data-mode="vertical" data-i18n="vertical">垂直</button>
+        <button class="mode-btn" data-mode="rect" data-i18n="rect">矩形</button>
+      </div>
+
+      <hr class="divider">
+      <div class="display-row">
+        <span class="label" data-i18n="display">显示器</span>
+        <select id="displaySelect"></select>
+        <span class="info-badge" id="resolutionBadge">--</span>
+        <span class="info-badge" id="dpiBadge">--</span>
+      </div>
+
+      <hr class="divider">
+
+      <!-- AI 区域识别测距 (YOLO) -->
+      <div style="background:rgba(0,0,0,0.25);border:1px solid rgba(255,170,0,0.2);border-radius:10px;padding:10px;">
+        <div data-i18n="aiDetect" style="font-size:12px;color:rgba(255,170,0,0.9);margin-bottom:8px;text-align:center;">🎯 AI检测</div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <div style="flex:1;background:rgba(0,0,0,0.3);border:1px solid rgba(255,170,0,0.25);border-radius:8px;padding:6px;text-align:center;min-height:34px;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+            <span data-i18n="markerA" style="font-size:10px;color:rgba(255,170,0,0.9);">A: 黄标</span>
+          </div>
+          <div style="flex:1;background:rgba(0,0,0,0.3);border:1px solid rgba(255,170,0,0.25);border-radius:8px;padding:6px;text-align:center;min-height:34px;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+            <span data-i18n="arrowB" style="font-size:10px;color:rgba(255,170,0,0.9);">B: 箭头</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">
+          <span data-i18n="region" style="font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;">识别区域:</span>
+          <span id="rrRegionText" data-i18n="notSet" style="font-size:11px;color:rgba(255,170,0,0.8);">未设置</span>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">
+          <button class="btn" id="btnSelectRegion" data-i18n="selectRegion" style="flex:1;padding:4px 8px;font-size:10px;background:rgba(255,170,0,0.08);border-color:rgba(255,170,0,0.2);color:#ffaa00;">✏ 手动框选</button>
+          <button class="btn" id="btnConfirmRegion" data-i18n="confirmRegion" style="flex:1;padding:4px 8px;font-size:10px;background:rgba(0,200,100,0.1);border-color:rgba(0,200,100,0.3);color:#00c864;" disabled>✓ 确认区域</button>
+          <button class="btn" id="btnDeleteRegion" data-i18n="deleteRegion" style="flex:1;padding:4px 8px;font-size:10px;background:rgba(255,80,80,0.1);border-color:rgba(255,80,80,0.3);color:#ff6b6b;" disabled>✕ 删除框选</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;">
+          <span data-i18n="threshold" style="font-size:11px;color:rgba(255,255,255,0.5);white-space:nowrap;">置信阈值:</span>
+          <input type="range" id="rrThreshold" min="0.15" max="0.8" step="0.05" value="0.3" style="flex:1;">
+          <span id="rrThresholdVal" style="font-size:11px;color:rgba(255,170,0,0.8);">0.30</span>
+        </div>
+        <button class="btn" id="btnStartRR" data-i18n="startRR" style="width:100%;background:rgba(255,170,0,0.08);border-color:rgba(255,170,0,0.2);color:#ffaa00;">
+          ▶ 开始 AI 识别测距
+        </button>
+        <div style="display:flex;gap:6px;margin-top:8px;align-items:center;">
+          <button class="btn" id="btnVoiceToggle" style="width:150px;flex:none;padding:6px;font-size:11px;background:rgba(255,170,0,0.06);border-color:rgba(255,170,0,0.15);color:rgba(255,170,0,0.6);">
+            🔇 曼波语音播报: 关
+          </button>
+          <button class="btn" id="btnTestVoice" data-i18n="testVoice" style="padding:6px 10px;font-size:11px;background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.1);color:rgba(255,255,255,0.6);">试听</button>
+        </div>
+        <div id="rrStatus" data-i18n="rrStatusHint" style="font-size:11px;color:rgba(255,255,255,0.4);text-align:center;margin-top:6px;">点击开始即可全屏识别（也可先框选区域限定范围）</div>
+        <div id="rrResult" style="display:none;font-size:13px;color:#ffaa00;text-align:center;margin-top:6px;font-weight:600;"></div>
+        <div id="rrMeters" style="display:none;font-size:15px;color:#ffd966;text-align:center;margin-top:6px;font-weight:700;text-shadow:0 0 10px rgba(255,217,102,0.4);"></div>
+      </div>
+
+      <hr class="divider">
+      <button class="measure-toggle" id="measureToggle">
+        <span id="measureToggleIcon">▣</span> <span id="measureToggleText" data-i18n="enterMeasure">进入测量模式</span>
+      </button>
+
+      <div class="btn-group">
+        <button class="btn" id="resetBtn" data-i18n="reset"><span>↺</span> 重置</button>
+        <button class="btn clear-btn" id="clearCanvasBtn" data-i18n="clear"><span>✕</span> 清除</button>
+        <div class="coords-hint" id="coordHint">
+          <span class="dot-indicator" style="background:#888; color:#888;"></span> <span data-i18n="idleMeasure">待测量</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 人工筛选样本窗口 -->
+  <div id="manualSelectModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:20000;align-items:center;justify-content:center;">
+    <div style="width:520px;max-width:92%;height:80vh;max-height:80vh;background:rgba(20,20,30,0.97);border:1px solid rgba(255,200,0,0.3);border-radius:14px;padding:16px;display:flex;flex-direction:column;">
+      <div style="font-size:14px;color:#ffc800;margin-bottom:6px;">🧹 人工挑选高质量样本</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:10px;">提示：勾选清晰、目标明显的样本点"加入训练"；左键拖拽框选区域可批量勾选；点击图片查看原图。</div>
+      <div id="sampleGrid" style="flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-content:start;user-select:none;"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn" id="btnAddToTrain" style="flex:1;background:rgba(0,200,100,0.1);border-color:rgba(0,200,100,0.3);color:#00c864;">✔ 加入训练</button>
+        <button class="btn" id="btnDeleteSamples" style="flex:1;background:rgba(255,80,80,0.1);border-color:rgba(255,80,80,0.3);color:#ff6b6b;">✕ 删除选中</button>
+        <button class="btn" id="btnOpenSamplesFolder" style="flex:1;background:rgba(0,200,255,0.08);border-color:rgba(0,200,255,0.25);color:#00c8ff;" title="打开采集样本文件夹，可自行查看/删除">📂 采集样本</button>
+        <button class="btn" id="btnCloseManual" style="flex:1;background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 样本大图预览（点击缩略图查看原图） -->
+  <div id="samplePreviewModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:30000;align-items:center;justify-content:center;cursor:zoom-out;">
+    <img id="samplePreviewImg" src="" style="max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,0.8);" title="点击关闭">
+  </div>
+
+  <!-- 软件更新弹窗 -->
+  <div id="updateModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:22000;align-items:center;justify-content:center;">
+    <div style="width:440px;max-width:92%;max-height:85vh;background:rgba(20,20,30,0.98);border:1px solid rgba(255,77,79,0.4);border-radius:14px;padding:20px;display:flex;flex-direction:column;">
+      <div data-i18n="updateTitle" style="font-size:16px;color:#ff4d4f;margin-bottom:8px;text-align:center;font-weight:700;">🔄 发现新版本</div>
+      <div id="updateVersionText" style="font-size:12px;color:#ffd966;margin-bottom:10px;text-align:center;">v1.9.2 → v1.9.3</div>
+      <div id="updateChangelog" style="flex:1;min-height:0;overflow-y:auto;font-size:12px;color:rgba(255,255,255,0.8);line-height:1.7;background:rgba(0,0,0,0.25);border-radius:8px;padding:10px;margin-bottom:12px;white-space:pre-wrap;"></div>
+      <div id="updateProgressWrap" style="display:none;margin-bottom:12px;">
+        <div style="height:12px;background:rgba(0,0,0,0.4);border-radius:6px;overflow:hidden;border:1px solid rgba(255,77,79,0.3);">
+          <div id="updateProgressFill" style="height:100%;width:0%;background:linear-gradient(90deg,#ff4d4f,#ffaa00);transition:width 0.3s;"></div>
+        </div>
+        <div id="updateProgressText" style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:4px;text-align:center;">0%</div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn" id="btnUpdateCancel" data-i18n="cancel" style="flex:1;background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.15);color:rgba(255,255,255,0.75);">取消</button>
+        <button class="btn" id="btnUpdateDownload" data-i18n="download" style="flex:1;background:rgba(0,217,138,0.15);border-color:rgba(0,217,138,0.4);color:#00d98a;">下载更新</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 首次使用协议弹窗（新用户必须先同意才能使用） -->
+  <div id="agreementModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:21000;align-items:center;justify-content:center;">
+    <div style="width:560px;max-width:94%;max-height:88vh;background:rgba(20,20,30,0.99);border:1px solid rgba(255,217,102,0.35);border-radius:14px;padding:22px;display:flex;flex-direction:column;">
+      <div style="font-size:17px;color:#ffd966;margin-bottom:12px;text-align:center;font-weight:700;">📜 用户协议与声明</div>
+      <div id="agreementContent" style="flex:1;min-height:0;overflow-y:auto;font-size:12.5px;color:rgba(255,255,255,0.85);line-height:1.85;padding:4px 8px 4px 4px;">
+        <div style="margin-bottom:10px;"><b style="color:#ffd966;">一、软件性质与盈利警告</b><br>
+        本软件「WT屏幕像素测距」是一款<b>免费、开源</b>的屏幕辅助工具，向所有用户免费提供，<b>永久免费、永不收费</b>。<br>
+        <b style="color:#ff6b6b;">⚠ 警惕任何以盈利为目的的商业行为！</b>任何个人或组织均<b style="color:#ff6b6b;">严禁</b>将本软件用于<b style="color:#ff6b6b;">商业转售、二次收费、捆绑付费、出租售卖、收徒收费</b>等任何牟利行为，违者将<b style="color:#ff6b6b;">依法追究法律责任</b>。</div>
+
+        <div style="margin-bottom:10px;"><b style="color:#ffd966;">二、关于游戏数据的郑重声明</b><br>
+        1. 本软件仅通过<b>「截取屏幕画面 + 图像识别」</b>的方式工作，<b>不读取、不修改、不注入</b>任何游戏内存、文件或网络数据包；<br>
+        2. 本软件<b>不篡改游戏数据</b>、不修改游戏客户端、不提供任何作弊功能（如自瞄、透视、数值修改等）；<br>
+        3. 本软件<b>纯本地运行</b>，不联网上传任何游戏数据或个人隐私信息。</div>
+
+        <div style="margin-bottom:10px;"><b style="color:#ffd966;">三、工作原理</b><br>
+        ① 截取您框选的屏幕区域画面 → ② 本地 AI 模型（YOLO 目标检测）识别画面中的目标（黄标、箭头等）→ ③ 计算两个目标中心点的像素距离 → ④ 按您设定的比例系数换算为实际距离并显示。<br>
+        整个过程只做「看屏幕 → 算距离」，<b>不干预游戏运行</b>。</div>
+
+        <div style="margin-bottom:10px;"><b style="color:#ffd966;">四、使用风险与免责声明</b><br>
+        1. 请自行确认所玩游戏的用户协议是否允许使用屏幕辅助测量工具；因使用本软件导致的游戏账号封禁、处罚等后果，<b>由用户自行承担</b>；<br>
+        2. 本软件按「现状」提供，作者不对因使用本软件造成的任何直接或间接损失承担责任。</div>
+
+        <div><b style="color:#ffd966;">五、用户承诺</b><br>
+        用户承诺仅将本软件用于合法、合规的个人用途，不将其用于任何违反法律法规或游戏规则的行为。</div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12.5px;color:rgba(255,255,255,0.9);cursor:pointer;user-select:none;">
+        <input type="checkbox" id="agreementCheck" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;"> 我已阅读并同意以上协议与声明
+      </label>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn" id="btnAgreeDisagree" style="flex:1;background:rgba(255,80,80,0.1);border-color:rgba(255,80,80,0.3);color:#ff6b6b;">不同意并退出</button>
+        <button class="btn" id="btnAgreeConfirm" style="flex:1;background:rgba(0,217,138,0.15);border-color:rgba(0,217,138,0.4);color:#00d98a;" disabled>同意并继续使用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新用户公告弹窗 -->
+  <div id="welcomeModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:20000;align-items:center;justify-content:center;">
+    <div style="width:420px;max-width:90%;background:rgba(20,20,30,0.97);border:1px solid rgba(255,217,102,0.3);border-radius:14px;padding:18px;">
+      <div style="font-size:15px;color:#ffd966;margin-bottom:10px;">📢 公告栏 · 欢迎使用 WT屏幕像素测距</div>
+      <div id="welcomeContent" style="font-size:12px;color:rgba(255,255,255,0.8);line-height:1.7;max-height:240px;overflow-y:auto;"></div>
+      <button class="btn" id="btnStartGuide" style="width:100%;margin-top:12px;background:rgba(255,217,102,0.15);border-color:rgba(255,217,102,0.4);color:#ffd966;">开始新手指引 →</button>
+    </div>
+  </div>
+
+  <!-- 指引步骤横幅 -->
+  <div id="guideBanner" style="display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:20001;background:rgba(20,20,30,0.95);border:1px solid rgba(0,217,255,0.4);border-radius:12px;padding:10px 16px;max-width:520px;">
+    <div id="guideText" style="font-size:12px;color:#00d9ff;line-height:1.6;"></div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <span id="guideStep" style="font-size:10px;color:rgba(255,255,255,0.5);align-self:center;"></span>
+      <button class="btn" id="guideSkip" style="margin-left:auto;padding:3px 10px;font-size:10px;">跳过指引</button>
+    </div>
+  </div>
+
+  <!-- 关闭选择对话框 -->
+  <div id="closeDialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:20002;align-items:center;justify-content:center;">
+    <div style="width:300px;background:rgba(20,20,30,0.97);border:1px solid rgba(255,255,255,0.2);border-radius:14px;padding:18px;">
+      <div style="font-size:14px;color:#fff;margin-bottom:14px;text-align:center;">关闭时请选择</div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn" id="btnCloseToTray" style="flex:1;background:rgba(0,217,255,0.1);border-color:rgba(0,217,255,0.3);color:#00d9ff;">最小化托盘区</button>
+        <button class="btn" id="btnCloseExit" style="flex:1;background:rgba(255,80,80,0.1);border-color:rgba(255,80,80,0.3);color:#ff6b6b;">退出应用</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:14px;font-size:11px;color:rgba(255,255,255,0.6);cursor:pointer;">
+        <input type="checkbox" id="rememberClose" style="cursor:pointer;"> 记住我的选择
+      </label>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const electronAPI = window.electronAPI;
+      const canvas = document.getElementById('measureCanvas');
+      const ctx = canvas.getContext('2d');
+      const interactionLayer = document.getElementById('interactionLayer');
+      const panel = document.getElementById('floatingPanel');
+      const panelHeader = document.getElementById('panelHeader');
+      const modeOverlay = document.getElementById('modeOverlay');
+      const pixelValueEl = document.getElementById('pixelValue');
+      const coordHintEl = document.getElementById('coordHint');
+      const coefAInput = document.getElementById('coefA');
+      const coefBInput = document.getElementById('coefB');
+      const pt1El = document.getElementById('pt1Coord');
+      const pt2El = document.getElementById('pt2Coord');
+      const dxValEl = document.getElementById('dxVal');
+      const dyValEl = document.getElementById('dyVal');
+      const dAValEl = document.getElementById('dAVal');
+      const dBValEl = document.getElementById('dBVal');
+      const formulaResultEl = document.getElementById('formulaResult');
+      const convertedUnitEl = document.getElementById('convertedUnit');
+      const displaySelect = document.getElementById('displaySelect');
+      const resolutionBadge = document.getElementById('resolutionBadge');
+      const dpiBadge = document.getElementById('dpiBadge');
+      const measureToggle = document.getElementById('measureToggle');
+      const measureToggleText = document.getElementById('measureToggleText');
+      const measureToggleIcon = document.getElementById('measureToggleIcon');
+
+      let points = [];
+      let isSettingSecondPoint = false;
+      let tempSecondPoint = null;
+      let devicePixelRatio = window.devicePixelRatio || 1;
+      let canvasWidth = window.innerWidth;
+      let canvasHeight = window.innerHeight;
+      let coefA = 1, coefB = 1, unit = 'M';
+      let measureMode = 'line';
+      let measureActive = false;
+      let displays = [];
+      let shortcutConfig = { exit:'CommandOrControl+Shift+X', hide:'CommandOrControl+Shift+H', clear:'CommandOrControl+Shift+C' };
+      let recordingField = null;
+
+      // 放大镜
+      const magCanvas = document.getElementById('magnifier');
+      const magCtx = magCanvas.getContext('2d');
+      const MAG_SIZE = 200;       // 放大镜像素大小
+      const MAG_ZOOM = 2;         // 放大倍数
+      const MAG_SRC = MAG_SIZE / MAG_ZOOM; // 源区域大小 = 100px
+      let screenImg = null;       // 屏幕截图 Image 对象
+
+      function resizeCanvas() {
+        canvasWidth = window.innerWidth; canvasHeight = window.innerHeight;
+        devicePixelRatio = window.devicePixelRatio || 1;
+        canvas.width = canvasWidth * devicePixelRatio;
+        canvas.height = canvasHeight * devicePixelRatio;
+        ctx.setTransform(1,0,0,1,0,0); ctx.scale(devicePixelRatio, devicePixelRatio);
+        drawCanvas();
+      }
+      window.addEventListener('resize', resizeCanvas);
+
+      // 点击穿透
+      let mouseOnPanel = false;
+      var forceInteractive = false;   // 指引期间强制可交互（var 提升）
+      var guideNotDone = true;        // 指引未完成前保持可交互（var 提升）
+      function updateMouseIgnore() {
+        const ignore = measureActive ? false : ((forceInteractive || guideNotDone) ? false : (mouseOnPanel ? false : true));
+        if (electronAPI) electronAPI.setMouseIgnore(ignore);
+        modeOverlay.classList.toggle('active', measureActive);
+      }
+      // 缓存各可交互区域矩形，避免每次 mousemove 强制重排（防卡顿）
+      let rectCache = null, rectCacheTime = 0;
+      function getRects() {
+        const now = performance.now();
+        if (!rectCache || now - rectCacheTime > 500) {   // 500ms缓存，减少强制重排
+          const g = (id) => { const el = document.getElementById(id); return (el && el.style.display !== 'none' && el.style.visibility !== 'hidden') ? el.getBoundingClientRect() : null; };
+          rectCache = {
+            panel: panel.getBoundingClientRect(),
+            welcome: g('welcomeModal'), close: g('closeDialog'),
+            guide: g('guideBanner'), settings: g('settingsPanel'),
+            notice: g('noticePanel'), gamepad: g('gamepadPop'),
+            manual: g('manualSelectModal'), playerSearch: g('playerSearchPop'),
+            agreement: g('agreementModal'), preview: g('samplePreviewModal'),
+            update: g('updateModal')
+          };
+          rectCacheTime = now;
+        }
+        return rectCache;
+      }
+      function inRect(r, x, y) { return r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; }
+      let lastMoveCheck = 0;
+      document.addEventListener('mousemove', (e) => {
+        if (pDrag) return;   // 拖动面板时不切换穿透
+        const now = performance.now();
+        if (now - lastMoveCheck < 100) return;   // 100ms节流
+        lastMoveCheck = now;
+        const R = getRects();
+        // 鼠标在任何面板/弹窗上 → 可点击；否则穿透到桌面
+        const interactive = inRect(R.welcome, e.clientX, e.clientY)
+                       || inRect(R.close, e.clientX, e.clientY)
+                       || inRect(R.panel, e.clientX, e.clientY)
+                       || inRect(R.guide, e.clientX, e.clientY)
+                       || inRect(R.settings, e.clientX, e.clientY)
+                       || inRect(R.notice, e.clientX, e.clientY)
+                       || inRect(R.gamepad, e.clientX, e.clientY)
+                       || inRect(R.manual, e.clientX, e.clientY)
+                       || inRect(R.agreement, e.clientX, e.clientY)
+                       || inRect(R.preview, e.clientX, e.clientY)
+                       || inRect(R.update, e.clientX, e.clientY);
+        if (interactive !== mouseOnPanel) {
+          mouseOnPanel = interactive;
+          if (electronAPI) electronAPI.setMouseIgnore(!interactive);
+        }
+      });
+
+      // 切屏/失焦/最小化恢复后重同步穿透状态
+      function resyncMouse() {
+        mouseOnPanel = null;
+        lastMoveCheck = 0;
+        // 延迟设置：等待窗口渲染完成后再切换穿透，避免 show() 后 IPC 不生效
+        setTimeout(() => {
+          if (electronAPI) electronAPI.setMouseIgnore(false);
+        }, 150);
+      }
+      window.addEventListener('focus', resyncMouse);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) { resyncMouse(); } });
+      if (electronAPI && electronAPI.onWinFocus) electronAPI.onWinFocus(resyncMouse);
+      // 主进程 minimize 恢复后额外触发
+      if (electronAPI && electronAPI.onRestored) electronAPI.onRestored(resyncMouse);
+
+      // 面板拖动
+      let pDrag = false, pOffX = 0, pOffY = 0;
+      let docked = false;
+      const EDGE = 30, DOCK_W = 200;
+      panelHeader.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON') return;
+        pDrag = true; pOffX = e.clientX - panel.offsetLeft; pOffY = e.clientY - panel.offsetTop;
+        panel.style.opacity = '0.85';
+        panel.classList.remove('docked');   // 拖动时展开
+      });
+      document.addEventListener('mousemove', (e) => {
+        if (pDrag) { panel.style.left = (e.clientX - pOffX) + 'px'; panel.style.top = (e.clientY - pOffY) + 'px'; panel.style.right = 'auto'; }
+      });
+      document.addEventListener('mouseup', () => {
+        if (!pDrag) return;
+        pDrag = false; panel.style.opacity = '1';
+        // 边缘吸附：靠近左/右边缘时停靠，只留测量值框
+        const L = panel.offsetLeft, W = panel.offsetWidth, SW = window.innerWidth;
+        if (L <= EDGE) { docked = true; panel.style.left = '0px'; }
+        else if (L + W >= SW - EDGE) { docked = true; panel.style.left = (SW - DOCK_W) + 'px'; }
+        else docked = false;
+        panel.classList.toggle('docked', docked);
+      });
+      // 悬停滑出/离开收回
+      panel.addEventListener('mouseenter', () => { if (docked && !pDrag) panel.classList.remove('docked'); });
+      panel.addEventListener('mouseleave', () => { if (docked && !pDrag) panel.classList.add('docked'); });
+
+      // 距离计算
+      function calcDist(p1, p2) {
+        if (!p1 || !p2) return 0;
+        const dx = p2.x - p1.x, dy = p2.y - p1.y;
+        return Math.sqrt(dx*dx + dy*dy);
+      }
+      function getModeledDist(p1, p2) {
+        if (!p1 || !p2) return 0;
+        const dx = Math.abs(p2.x - p1.x), dy = Math.abs(p2.y - p1.y);
+        if (measureMode === 'horizontal') return dx;
+        if (measureMode === 'vertical') return dy;
+        return Math.sqrt(dx*dx + dy*dy);
+      }
+      function getModeledEnd(p1, p2) {
+        if (!p1 || !p2) return p2;
+        if (measureMode === 'horizontal') return { x: p2.x, y: p1.y };
+        if (measureMode === 'vertical') return { x: p1.x, y: p2.y };
+        return p2;
+      }
+      function convertDist(d) { return coefB === 0 ? 0 : d * coefA / coefB; }
+
+      function updateDisplay() {
+        let dist = 0, dx = 0, dy = 0, p1 = null, p2 = null;
+        if (points.length === 2) { p1 = points[0]; p2 = points[1]; }
+        else if (points.length === 1 && isSettingSecondPoint && tempSecondPoint) { p1 = points[0]; p2 = tempSecondPoint; }
+        else if (points.length === 1) { p1 = points[0]; }
+        if (p1 && p2) { dx = Math.abs(p2.x - p1.x); dy = Math.abs(p2.y - p1.y); dist = getModeledDist(p1, p2); }
+        const cv0 = convertDist(dist);
+        pixelValueEl.textContent = cv0.toFixed(2);   // 实际测量值（米）
+        pt1El.textContent = p1 ? '('+Math.round(p1.x)+','+Math.round(p1.y)+')' : '(--,--)';
+        pt2El.textContent = p2 ? '('+Math.round(p2.x)+','+Math.round(p2.y)+')' : '(--,--)';
+        dxValEl.textContent = 'x=' + dx.toFixed(1);
+        dyValEl.textContent = 'y=' + dy.toFixed(1);
+        dAValEl.textContent = '地图单格距离=' + coefA;
+        dBValEl.textContent = '测量像素值=' + coefB;
+        const cv = convertDist(dist);
+        formulaResultEl.textContent = cv.toFixed(3);
+        convertedUnitEl.textContent = unit;
+      }
+
+      function updateHint() {
+        if (!measureActive) coordHintEl.innerHTML = '<span class="dot-indicator" style="background:#888;color:#888;"></span> 待测量';
+        else if (points.length === 0) coordHintEl.innerHTML = '<span class="dot-indicator" style="background:#ffaa00;color:#ffaa00;"></span> 点击设定起点';
+        else if (points.length === 1) coordHintEl.innerHTML = '<span class="dot-indicator" style="background:#ff5500;color:#ff5500;"></span> 点击设定终点';
+        else coordHintEl.innerHTML = '<span style="color:#ffd966;">✓</span> 已测量';
+      }
+
+      // 绘制（基于 3.txt 的绘制逻辑）
+      function drawCanvas() {
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        // 绘制已选区域
+        if (rrRegion) {
+          ctx.strokeStyle = 'rgba(255,170,0,0.5)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 4]);
+          ctx.strokeRect(rrRegion.x, rrRegion.y, rrRegion.w, rrRegion.h);
+          ctx.setLineDash([]);
+          ctx.fillStyle = 'rgba(255,170,0,0.04)';
+          ctx.fillRect(rrRegion.x, rrRegion.y, rrRegion.w, rrRegion.h);
+        }
+        if (points.length === 0 && !tempSecondPoint) return;
+        let p1 = points.length >= 1 ? points[0] : null;
+        let p2 = null;
+        if (points.length === 2) p2 = points[1];
+        else if (points.length === 1 && isSettingSecondPoint && tempSecondPoint) p2 = tempSecondPoint;
+        if (!p1) return;
+        if (!p2) { drawPoint(p1, 'start'); return; }
+        const drawP2 = getModeledEnd(p1, p2);
+
+        // 矩形模式
+        if (measureMode === 'rect') {
+          const rx = Math.min(p1.x, p2.x), ry = Math.min(p1.y, p2.y);
+          const rw = Math.abs(p2.x - p1.x), rh = Math.abs(p2.y - p1.y);
+          ctx.fillStyle = 'rgba(255,220,100,0.06)'; ctx.fillRect(rx, ry, rw, rh);
+          ctx.strokeStyle = 'rgba(255,220,100,0.8)'; ctx.lineWidth = 2;
+          ctx.shadowColor = 'rgba(255,180,0,0.6)'; ctx.shadowBlur = 10;
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+          ctx.setLineDash([6,4]); ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke(); ctx.setLineDash([]);
+          const dd = calcDist(p1, p2), cd = convertDist(dd).toFixed(2);
+          drawLabel((p1.x+p2.x)/2, (p1.y+p2.y)/2, dd.toFixed(1)+'px ('+rw.toFixed(0)+'x'+rh.toFixed(0)+')='+cd+' '+unit);
+          drawPoint(p1, 'start'); drawPoint(p2, 'end'); return;
+        }
+
+        // 直线
+        ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(drawP2.x, drawP2.y);
+        ctx.strokeStyle = 'rgba(255,220,100,0.9)'; ctx.lineWidth = 2.5;
+        ctx.shadowColor = 'rgba(255,180,0,0.8)'; ctx.shadowBlur = 12; ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(drawP2.x, drawP2.y);
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.2;
+        ctx.shadowBlur = 8; ctx.shadowColor = 'rgba(255,200,50,0.6)';
+        ctx.setLineDash([6,4]); ctx.stroke(); ctx.setLineDash([]);
+        if (measureMode === 'horizontal' || measureMode === 'vertical') {
+          ctx.setLineDash([3,5]); ctx.strokeStyle = 'rgba(255,100,50,0.35)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke(); ctx.setLineDash([]);
+        }
+        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+        const dist = getModeledDist(p1, p2), cv = convertDist(dist).toFixed(3);
+        const dx = Math.abs(drawP2.x - p1.x), dy = Math.abs(drawP2.y - p1.y);
+        drawLabel((p1.x+drawP2.x)/2, (p1.y+drawP2.y)/2, 'd=\u221a('+dx.toFixed(0)+'\u00b2+'+dy.toFixed(0)+'\u00b2)\u00d7('+coefA+'/'+coefB+')='+cv+' '+unit);
+        drawPoint(p1, 'start'); drawPoint(drawP2, points.length === 2 ? 'end' : 'temp');
+        if ((measureMode === 'horizontal' || measureMode === 'vertical') && points.length < 2) drawPoint(p2, 'temp');
+      }
+
+      function drawPoint(p, type) {
+        const isStart = type === 'start', isTemp = type === 'temp';
+        const r = isTemp ? 5 : 7;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r+3, 0, 2*Math.PI);
+        ctx.fillStyle = isStart ? 'rgba(255,170,0,0.4)' : (isTemp ? 'rgba(255,80,0,0.4)' : 'rgba(255,100,50,0.5)');
+        ctx.shadowColor = isStart ? '#ffaa00' : '#ff5500'; ctx.shadowBlur = 14; ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 2*Math.PI);
+        ctx.fillStyle = isStart ? '#ffaa00' : (isTemp ? '#ff6633' : '#ff4400');
+        ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 6; ctx.fill();
+        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, 2*Math.PI);
+        ctx.fillStyle = 'white'; ctx.fill();
+        ctx.save(); ctx.font = '11px "Segoe UI",monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.shadowColor = 'black'; ctx.shadowBlur = 4;
+        ctx.fillText(Math.round(p.x)+', '+Math.round(p.y), p.x+14, p.y-14); ctx.restore();
+      }
+
+      function drawLabel(x, y, text) {
+        ctx.save(); ctx.font = 'bold 15px "Segoe UI",system-ui,sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(text).width, pad = 10, bh = 26;
+        ctx.fillStyle = 'rgba(20,20,30,0.88)'; ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 10;
+        roundRect(ctx, x-tw/2-pad, y-bh/2-2, tw+pad*2, bh, 20); ctx.fill();
+        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+        ctx.fillStyle = '#ffd966'; ctx.fillText(text, x, y); ctx.restore();
+      }
+
+      function roundRect(ctx, x, y, w, h, r) {
+        if (w < 2*r) r = w/2; if (h < 2*r) r = h/2;
+        ctx.beginPath();
+        ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+        ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+        ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+        ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+      }
+
+      // 测量事件（基于 3.txt 逻辑）
+      function getPos(e) {
+        let cx, cy;
+        if (e.touches) { if (e.touches.length === 0) return null; cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
+        else { cx = e.clientX; cy = e.clientY; }
+        return { x: Math.min(Math.max(cx, 0), canvasWidth), y: Math.min(Math.max(cy, 0), canvasHeight) };
+      }
+      function onPanel(e) {
+        const r = panel.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      }
+      function pDown(e) {
+        if (!measureActive || onPanel(e)) return;
+        e.preventDefault(); const pos = getPos(e); if (!pos) return;
+        if (rrSelecting) { rrSelStart = pos; return; }
+        if (points.length === 2) { points = []; isSettingSecondPoint = false; tempSecondPoint = null; }
+        if (points.length === 0) points.push({x:pos.x, y:pos.y});
+        else if (points.length === 1) points.push({x:pos.x, y:pos.y});
+        updateDisplay(); updateHint(); drawCanvas();
+        updateMagnifier(pos.x, pos.y);
+      }
+      function pMove(e) {
+        if (!measureActive || onPanel(e)) return;
+        e.preventDefault(); const pos = getPos(e); if (!pos) return;
+        if (rrSelecting && rrSelStart) {
+          drawCanvas();
+          const rx = Math.min(rrSelStart.x, pos.x), ry = Math.min(rrSelStart.y, pos.y);
+          const rw = Math.abs(pos.x - rrSelStart.x), rh = Math.abs(pos.y - rrSelStart.y);
+          ctx.strokeStyle = 'rgba(255,170,0,0.8)'; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
+          ctx.strokeRect(rx, ry, rw, rh); ctx.setLineDash([]);
+          ctx.fillStyle = 'rgba(255,170,0,0.08)'; ctx.fillRect(rx, ry, rw, rh);
+          return;
+        }
+        if (points.length === 1) { tempSecondPoint = {x:pos.x, y:pos.y}; isSettingSecondPoint = true; updateDisplay(); drawCanvas(); }
+        else if (points.length === 2 && e.buttons === 1) { points[1] = {x:pos.x, y:pos.y}; updateDisplay(); drawCanvas(); }
+        updateMagnifier(pos.x, pos.y);
+      }
+      function pUp(e) {
+        if (rrSelecting && rrSelStart) {
+          const pos = e ? getPos(e) : null;
+          if (pos) {
+            const rx = Math.min(rrSelStart.x, pos.x), ry = Math.min(rrSelStart.y, pos.y);
+            const rw = Math.abs(pos.x - rrSelStart.x), rh = Math.abs(pos.y - rrSelStart.y);
+            if (rw > 20 && rh > 20) {
+              pendingRegion = { x: Math.round(rx), y: Math.round(ry), w: Math.round(rw), h: Math.round(rh) };
+              document.getElementById('rrRegionText').textContent =
+                '(' + pendingRegion.x + ',' + pendingRegion.y + ') ' + pendingRegion.w + 'x' + pendingRegion.h + ' 待确认';
+              document.getElementById('btnConfirmRegion').disabled = false;
+              document.getElementById('btnDeleteRegion').disabled = false;
+              document.getElementById('rrStatus').textContent = t('regionSelected');
+            }
+          }
+          rrSelecting = false; rrSelStart = null;
+          measureActive = false; updateMouseIgnore();
+          if (electronAPI) electronAPI.setAlwaysOnTopLevel('screen-saver');
+          drawCanvas();
+          return;
+        }
+        if (points.length === 2) { isSettingSecondPoint = false; tempSecondPoint = null; updateDisplay(); drawCanvas(); }
+      }
+      function reset() { points = []; isSettingSecondPoint = false; tempSecondPoint = null; updateDisplay(); updateHint(); drawCanvas(); }
+
+      // ===== 放大镜 =====
+      function updateMagnifier(mx, my) {
+        if (!screenImg) return;
+        // 定位放大镜（避免超出屏幕边界）
+        let magX = mx + 30, magY = my + 30;
+        if (magX + MAG_SIZE > canvasWidth) magX = mx - MAG_SIZE - 30;
+        if (magY + MAG_SIZE > canvasHeight) magY = my - MAG_SIZE - 30;
+        magCanvas.style.left = magX + 'px';
+        magCanvas.style.top = magY + 'px';
+
+        // 计算源区域（以鼠标为中心）
+        const halfSrc = MAG_SRC / 2;
+        const sx = mx - halfSrc;
+        const sy = my - halfSrc;
+
+        // 清空放大镜
+        magCtx.fillStyle = 'rgba(20,20,30,0.9)';
+        magCtx.fillRect(0, 0, MAG_SIZE, MAG_SIZE);
+
+        // 绘制放大区域
+        try {
+          magCtx.drawImage(screenImg,
+            sx, sy, MAG_SRC, MAG_SRC,   // 源区域
+            0, 0, MAG_SIZE, MAG_SIZE    // 目标区域（放大2倍）
+          );
+        } catch(e) {}
+
+        // 绘制十字准星
+        magCtx.strokeStyle = 'rgba(255,217,102,0.8)';
+        magCtx.lineWidth = 1;
+        magCtx.beginPath();
+        magCtx.moveTo(MAG_SIZE/2, 0); magCtx.lineTo(MAG_SIZE/2, MAG_SIZE);
+        magCtx.moveTo(0, MAG_SIZE/2); magCtx.lineTo(MAG_SIZE, MAG_SIZE/2);
+        magCtx.stroke();
+
+        // 中心圆点
+        magCtx.beginPath();
+        magCtx.arc(MAG_SIZE/2, MAG_SIZE/2, 3, 0, 2*Math.PI);
+        magCtx.fillStyle = '#ffd966';
+        magCtx.fill();
+
+        // 边框
+        magCtx.strokeStyle = 'rgba(255,217,102,0.6)';
+        magCtx.lineWidth = 2;
+        magCtx.beginPath();
+        magCtx.arc(MAG_SIZE/2, MAG_SIZE/2, MAG_SIZE/2 - 1, 0, 2*Math.PI);
+        magCtx.stroke();
+      }
+
+      // 测量模式切换
+      measureToggle.addEventListener('click', async () => {
+        measureActive = !measureActive;
+        if (measureActive) {
+          measureToggle.classList.add('active');
+          measureToggleText.textContent = t('exitMeasure');
+          measureToggleIcon.textContent = '◉';
+          magCanvas.style.display = 'block';
+          updateMouseIgnore();
+          // 直接截屏（透明窗口不遮挡桌面），不再隐藏窗口，避免"关闭一段时间"
+          if (electronAPI) {
+            try {
+              const cap = await electronAPI.captureScreen();
+              if (cap && !cap.error && cap.dataUrl) {
+                const img = new Image();
+                img.onload = () => { screenImg = img; };
+                img.src = cap.dataUrl;
+              }
+            } catch(e) {}
+          }
+          updateHint();
+        } else {
+          measureToggle.classList.remove('active');
+          measureToggleText.textContent = t('enterMeasure');
+          measureToggleIcon.textContent = '▣';
+          reset();
+          magCanvas.style.display = 'none';
+          screenImg = null;
+        }
+        updateMouseIgnore(); updateHint();
+      });
+
+      // 系数输入
+      coefAInput.addEventListener('input', () => { coefA = parseFloat(coefAInput.value) || 0; updateDisplay(); drawCanvas(); });
+      coefBInput.addEventListener('input', () => { coefB = parseFloat(coefBInput.value) || 0; updateDisplay(); drawCanvas(); });
+
+      // 模式按钮
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active'); measureMode = btn.dataset.mode;
+          updateDisplay(); drawCanvas();
+        });
+      });
+
+      // 显示器
+      displaySelect.addEventListener('change', () => {
+        const id = parseInt(displaySelect.value);
+        const d = displays.find(x => x.id === id);
+        if (d) {
+          resolutionBadge.textContent = d.size.width + 'x' + d.size.height;
+          dpiBadge.textContent = 'DPI ' + Math.round(d.scaleFactor*100) + '%';
+          if (electronAPI) electronAPI.switchDisplay(d);
+        }
+      });
+
+      // 快捷键
+      if (electronAPI) {
+        electronAPI.onShortcutConfig((cfg) => { shortcutConfig = Object.assign(shortcutConfig, cfg); updateSC(); });
+        electronAPI.onClearMeasurement(() => reset());
+        electronAPI.onDisplaysInfo((data) => {
+          displays = data; displaySelect.innerHTML = '';
+          data.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.id;
+            opt.textContent = (d.isPrimary ? '主显示器' : '显示器'+d.id) + ' ('+d.size.width+'x'+d.size.height+' '+Math.round(d.scaleFactor*100)+'%)';
+            displaySelect.appendChild(opt);
+          });
+          if (data.length > 0) {
+            resolutionBadge.textContent = data[0].size.width + 'x' + data[0].size.height;
+            dpiBadge.textContent = 'DPI ' + Math.round(data[0].scaleFactor*100) + '%';
+          }
+        });
+      }
+
+      function accelToDisp(a) { return a ? a.replace(/CommandOrControl\+/g,'Ctrl+').replace(/Shift\+/g,'Shift+').replace(/Alt\+/g,'Alt+') : '--'; }
+      function updateSC() {
+        document.getElementById('scExit').value = accelToDisp(shortcutConfig.exit);
+        document.getElementById('scHide').value = accelToDisp(shortcutConfig.hide);
+        document.getElementById('scClear').value = accelToDisp(shortcutConfig.clear);
+      }
+      function buildAccel(e) {
+        const p = [];
+        if (e.ctrlKey || e.metaKey) p.push('CommandOrControl');
+        if (e.shiftKey) p.push('Shift');
+        if (e.altKey) p.push('Alt');
+        let k = e.key; if (k === ' ') k = 'Space'; if (k.length === 1) k = k.toUpperCase();
+        if (['Control','Shift','Alt','Meta'].includes(k)) return null;
+        p.push(k); return p.join('+');
+      }
+      function startRec(f, b) {
+        if (recordingField) stopRec();
+        recordingField = f;
+        const inp = document.getElementById('sc'+f), btn = document.getElementById(b);
+        inp.classList.add('recording'); btn.classList.add('recording');
+        btn.textContent = '按下...'; inp.value = '请按下快捷键...';
+      }
+      function stopRec() {
+        if (!recordingField) return; const f = recordingField; recordingField = null;
+        document.getElementById('sc'+f).classList.remove('recording');
+        const btn = document.getElementById('btnSc'+f);
+        btn.classList.remove('recording'); btn.textContent = '更改'; updateSC();
+      }
+      document.addEventListener('keydown', (e) => {
+        if (!recordingField) return;
+        e.preventDefault(); e.stopPropagation();
+        const a = buildAccel(e); if (!a) return;
+        shortcutConfig[recordingField.toLowerCase()] = a;
+        if (electronAPI) electronAPI.updateShortcuts(shortcutConfig);
+        saveSettings();
+        stopRec();
+      });
+      document.getElementById('btnScExit').addEventListener('click', () => startRec('Exit','btnScExit'));
+      document.getElementById('btnScHide').addEventListener('click', () => startRec('Hide','btnScHide'));
+      document.getElementById('btnScClear').addEventListener('click', () => startRec('Clear','btnScClear'));
+
+      // ===== YOLO 目标检测（无需参考图，模型已训练好 黄标/箭头）=====
+
+      // ===== 设置持久化 =====
+      function saveSettings() {
+        if (!electronAPI) return;
+        const threshold = parseFloat(document.getElementById('rrThreshold').value);
+        electronAPI.saveSettings({
+          coefA, coefB, unit, measureMode,
+          shortcuts: shortcutConfig,
+          rrRegion: rrRegion,
+          rrThreshold: threshold,
+          rrVoiceEnabled: rrVoiceEnabled,
+          customVoicePath: customVoicePath,
+          ttsVoice: ttsVoice,
+          uiOpacity: uiOpacity,
+          uiTheme: uiTheme,
+          lang: currentLang,
+          guideDone: guideDoneFlag,
+          closeChoice: closeChoice,
+          agreed: agreedFlag
+        });
+      }
+
+      async function loadSettings() {
+        if (!electronAPI) return;
+        const s = await electronAPI.loadSettings();
+        savedGuideDone = !!(s && s.guideDone);
+        guideNotDone = !savedGuideDone;
+        savedAgreed = !!(s && s.agreed);
+        agreedFlag = savedAgreed;
+        updateMouseIgnore();
+        if (s && s.closeChoice) closeChoice = s.closeChoice;
+        // 无保存设置时用默认两张图
+        if (!s || Object.keys(s).length === 0) {
+          checkRRReady();
+          updateDisplay();
+          return;
+        }
+        if (s.coefA !== undefined) { coefA = s.coefA; coefAInput.value = s.coefA; }
+        if (s.coefB !== undefined) { coefB = s.coefB; coefBInput.value = s.coefB; }
+        if (s.measureMode) measureMode = s.measureMode;
+        if (s.shortcuts) {
+          shortcutConfig = Object.assign(shortcutConfig, s.shortcuts);
+          updateSC();
+          if (electronAPI) electronAPI.updateShortcuts(shortcutConfig);
+        }
+        if (s.rrThreshold !== undefined) {
+          document.getElementById('rrThreshold').value = s.rrThreshold;
+          document.getElementById('rrThresholdVal').textContent = s.rrThreshold.toFixed(2);
+        }
+        if (s.rrVoiceEnabled) {
+          rrVoiceEnabled = true;
+          const vbtn = document.getElementById('btnVoiceToggle');
+          vbtn.textContent = t('voiceOn');
+          vbtn.style.color = '#ffaa00';
+          vbtn.style.borderColor = 'rgba(255,170,0,0.4)';
+        }
+        if (s.customVoicePath) {
+          customVoicePath = s.customVoicePath;
+          document.getElementById('voiceFileName').textContent = s.customVoicePath.split(/[\\/]/).pop();
+        }
+        if (s.ttsVoice) {
+          ttsVoice = s.ttsVoice;
+          document.getElementById('voiceSelect').value = s.ttsVoice;
+        }
+        if (s.rrRegion) {
+          rrRegion = s.rrRegion;
+          document.getElementById('btnDeleteRegion').disabled = false;
+        }
+        if (s.uiOpacity !== undefined) {
+          document.getElementById('opacitySlider').value = s.uiOpacity;
+          applyOpacity(s.uiOpacity);
+        }
+        if (s.uiTheme) {
+          applyTheme(s.uiTheme);
+        }
+        if (s.lang) {
+          applyLanguage(s.lang);
+        }
+        checkRRReady();
+        updateDisplay();
+        drawCanvas();
+      }
+
+      // 系数变化时自动保存
+      coefAInput.addEventListener('change', saveSettings);
+      coefBInput.addEventListener('change', saveSettings);
+
+      // ===== 区域实时双图识别测距 =====
+      // 识别区域：默认未设置，需手动框选确认
+      let rrRegion = null;
+      let pendingRegion = null;   // 框选后待确认的区域
+      let rrRunning = false;
+      let rrSelecting = false;
+      let rrSelStart = null;
+      let lineClearTimer = null;   // 测距成功后0.5秒清除直线的定时器
+      let lineToken = 0;           // 防止清除掉新画的线
+
+      // ===== 曼波语音播报 =====
+      let rrVoiceEnabled = false;
+      let rrLastBroadcastTime = 0;
+      let rrLastBroadcastMeters = -1;
+      let rrAudioPlayer = null;
+      let rrSpeaking = false;
+      let customVoicePath = null;   // 自定义语音文件路径（可更换其他 AI 语音）
+      let ttsVoice = 'zh-CN-XiaoyiNeural';   // 内置 edge-tts 音色
+      const BROADCAST_INTERVAL = 2000;   // 至少间隔2秒播报一次
+      const BROADCAST_MIN_CHANGE = 1;    // 米数变化超过1才重新播报
+
+      // 播放 base64 音频
+      function playBase64Audio(b64, mime) {
+        try {
+          if (rrAudioPlayer) { rrAudioPlayer.pause(); rrAudioPlayer = null; }
+          rrAudioPlayer = new Audio('data:' + (mime || 'audio/mp3') + ';base64,' + b64);
+          rrAudioPlayer.volume = 1.0;
+          rrAudioPlayer.onended = () => { rrSpeaking = false; };
+          rrAudioPlayer.play().catch(() => { rrSpeaking = false; });
+        } catch(e) { rrSpeaking = false; }
+      }
+
+      // 语音播报：优先用自定义语音文件，否则用 edge-tts 曼波音
+      async function manboSpeak(text) {
+        if (!electronAPI || rrSpeaking) return;
+        rrSpeaking = true;
+        if (customVoicePath) {
+          // 播放自定义语音文件
+          const res = await electronAPI.readFileBase64(customVoicePath);
+          if (res && res.base64) {
+            playBase64Audio(res.base64, res.mime);
+            return;
+          } else {
+            rrSpeaking = false;
+            return;
+          }
+        }
+        // 默认 edge-tts 所选内置音色
+        const res = await electronAPI.speakText(text, ttsVoice, '+12%', '+10Hz');
+        if (res && res.audio) {
+          playBase64Audio(res.audio, 'audio/mp3');
+        } else {
+          rrSpeaking = false;
+        }
+      }
+
+      // 选择自定义语音文件
+      document.getElementById('btnSelectVoice').addEventListener('click', async () => {
+        if (!electronAPI) return;
+        const res = await electronAPI.selectVoiceFile();
+        if (res && res.filePath) {
+          customVoicePath = res.filePath;
+          document.getElementById('voiceFileName').textContent = res.fileName;
+          saveSettings();
+        }
+      });
+
+      // 切换内置音色（选择后清除自定义文件，改用内置）
+      document.getElementById('voiceSelect').addEventListener('change', (e) => {
+        ttsVoice = e.target.value;
+        customVoicePath = null;
+        document.getElementById('voiceFileName').textContent = t('builtInVoice');
+        saveSettings();
+      });
+
+      // ===== 设置面板：开关 / 透明度 / 主题色 =====
+      let uiOpacity = 0.88;
+      let uiTheme = 'gold';
+      const THEME_HUE = { gold: 0, blue: 200, green: 150, purple: 270, red: 350 };
+
+      // ===== i18n 多语言 =====
+      let currentLang = 'zh';
+      const I18N = {
+        zh: {
+          // 顶部按钮 title
+          trainStatus: '训练状态: 空闲 | 样本 0/1500',
+          updateAvailable: '发现新版本，点击查看',
+          kook: '开黑社区',
+          playerSearch: 'Statshark 玩家查询',
+          github: 'GitHub 仓库',
+          notice: '公告栏',
+          settings: '设置',
+          minimize: '最小化',
+          close: '关闭',
+          // 设置面板
+          language: '语言:',
+          voice: '内置音色:',
+          custom: '自定义:',
+          changeVoice: '🎵 更换语音包文件',
+          builtInVoice: '用内置音色',
+          opacity: '透明度:',
+          theme: '主题色:',
+          hotkeys: '快捷键（点击更改，自动保存）',
+          exit: '退出',
+          hideShow: '隐藏/显示',
+          clearMeasure: '清除测量',
+          change: '更改',
+          verify: '🔍 文件校验',
+          trainAI: '🧠 训练AI',
+          log: '📄 日志',
+          autoFilter: '🤖 自动筛选',
+          manualPick: '👁 人工挑选（提升更大）',
+          samples: '已采集样本:',
+          idle: '空闲',
+          checkUpdate: '🔄 检查更新',
+          // AI 识别面板
+          aiDetect: '🎯 AI检测',
+          markerA: 'A: 黄标',
+          arrowB: 'B: 箭头',
+          region: '识别区域:',
+          notSet: '未设置',
+          selectRegion: '✏ 手动框选',
+          confirmRegion: '✓ 确认区域',
+          deleteRegion: '✕ 删除框选',
+          threshold: '置信阈值:',
+          startRR: '▶ 开始 AI 识别测距',
+          stopRR: '⏹ 停止 AI 识别',
+          testVoice: '试听',
+          voiceOn: '🔊 曼波语音播报: 开',
+          voiceOff: '🔇 曼波语音播报: 关',
+          rrStatusHint: '点击开始即可全屏识别（也可先框选区域限定范围）',
+          stopped: '已停止',
+          regionSelected: '已框选，请点击"确认区域"',
+          // 测量相关
+          actualDistance: '实际测量值',
+          gridDistance: '地图单格距离(×)',
+          pixelValueLabel: '测量像素值(÷)',
+          line: '直线',
+          horizontal: '水平',
+          vertical: '垂直',
+          rect: '矩形',
+          display: '显示器',
+          enterMeasure: '进入测量模式',
+          exitMeasure: '退出测量模式',
+          reset: '↺ 重置',
+          clear: '✕ 清除',
+          idleMeasure: '待测量',
+          // 更新弹窗
+          updateTitle: '🔄 发现新版本',
+          cancel: '取消',
+          download: '下载更新'
+        },
+        en: {
+          trainStatus: 'Train: idle | Samples 0/1500',
+          updateAvailable: 'New version available, click to view',
+          kook: 'KOOK Community',
+          playerSearch: 'Statshark Player Search',
+          github: 'GitHub Repository',
+          notice: 'Notice',
+          settings: 'Settings',
+          minimize: 'Minimize',
+          close: 'Close',
+          language: 'Language:',
+          voice: 'Voice:',
+          custom: 'Custom:',
+          changeVoice: '🎵 Change voice file',
+          builtInVoice: 'Built-in voice',
+          opacity: 'Opacity:',
+          theme: 'Theme:',
+          hotkeys: 'Hotkeys (click to change, auto-saved)',
+          exit: 'Exit',
+          hideShow: 'Hide/Show',
+          clearMeasure: 'Clear measure',
+          change: 'Change',
+          verify: '🔍 Verify files',
+          trainAI: '🧠 Train AI',
+          log: '📄 Log',
+          autoFilter: '🤖 Auto filter',
+          manualPick: '👁 Manual pick (better)',
+          samples: 'Samples:',
+          idle: 'Idle',
+          checkUpdate: '🔄 Check update',
+          aiDetect: '🎯 AI Detection',
+          markerA: 'A: Marker',
+          arrowB: 'B: Arrow',
+          region: 'Region:',
+          notSet: 'Not set',
+          selectRegion: '✏ Select region',
+          confirmRegion: '✓ Confirm',
+          deleteRegion: '✕ Clear region',
+          threshold: 'Threshold:',
+          startRR: '▶ Start AI Ranging',
+          stopRR: '⏹ Stop AI',
+          testVoice: 'Test',
+          voiceOn: '🔊 Voice: On',
+          voiceOff: '🔇 Voice: Off',
+          rrStatusHint: 'Click start for full-screen detection (or select a region first)',
+          stopped: 'Stopped',
+          regionSelected: 'Region selected, click "Confirm"',
+          actualDistance: 'Distance',
+          gridDistance: 'Grid distance(×)',
+          pixelValueLabel: 'Pixel value(÷)',
+          line: 'Line',
+          horizontal: 'Horizontal',
+          vertical: 'Vertical',
+          rect: 'Rect',
+          display: 'Display',
+          enterMeasure: 'Enter measure mode',
+          exitMeasure: 'Exit measure mode',
+          reset: '↺ Reset',
+          clear: '✕ Clear',
+          idleMeasure: 'Idle',
+          updateTitle: '🔄 Update Available',
+          cancel: 'Cancel',
+          download: 'Download'
+        }
+      };
+      function t(key) {
+        return (I18N[currentLang] && I18N[currentLang][key]) || I18N.zh[key] || key;
+      }
+      function applyLanguage(lang) {
+        currentLang = lang === 'en' ? 'en' : 'zh';
+        const sel = document.getElementById('langSelect');
+        if (sel) sel.value = currentLang;
+        document.documentElement.lang = currentLang === 'zh' ? 'zh-CN' : 'en';
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+          const txt = t(el.getAttribute('data-i18n'));
+          if (txt) el.textContent = txt;
+        });
+        document.querySelectorAll('[data-i18n-title]').forEach(el => {
+          const txt = t(el.getAttribute('data-i18n-title'));
+          if (txt) el.title = txt;
+        });
+        // 动态状态文字同步
+        if (typeof rrRunning !== 'undefined') {
+          const btn = document.getElementById('btnStartRR');
+          if (btn) btn.textContent = t(rrRunning ? 'stopRR' : 'startRR');
+        }
+        if (typeof rrVoiceEnabled !== 'undefined') {
+          const vbtn = document.getElementById('btnVoiceToggle');
+          if (vbtn) vbtn.textContent = t(rrVoiceEnabled ? 'voiceOn' : 'voiceOff');
+        }
+        if (typeof measureActive !== 'undefined') {
+          const mt = document.getElementById('measureToggleText');
+          if (mt) mt.textContent = t(measureActive ? 'exitMeasure' : 'enterMeasure');
+        }
+      }
+
+      // 抽屉开关（左侧滑出，不影响主面板）
+      function drawerOpen(el) { return el.style.visibility !== 'hidden'; }
+      function setDrawer(el, open) {
+        el.style.visibility = open ? 'visible' : 'hidden';
+        el.style.transform = open ? 'translate(0,-50%)' : 'translate(-130%,-50%)';
+      }
+      function toggleDrawer(id) {
+        const el = document.getElementById(id);
+        setDrawer(el, !drawerOpen(el));
+      }
+      document.getElementById('btnSettings').addEventListener('click', () => toggleDrawer('settingsPanel'));
+      document.getElementById('btnNotice').addEventListener('click', () => toggleDrawer('noticePanel'));
+      document.getElementById('langSelect').addEventListener('change', (e) => { applyLanguage(e.target.value); saveSettings(); });
+      document.querySelectorAll('.drawer-close').forEach(b => {
+        b.addEventListener('click', () => setDrawer(document.getElementById(b.dataset.close), false));
+      });
+
+      // 开源与开发框架板块：点击展开/收起
+      document.getElementById('openSourceHeader').addEventListener('click', () => {
+        const body = document.getElementById('openSourceBody');
+        const arrow = document.getElementById('openSourceArrow');
+        const collapsed = body.style.display !== 'none';
+        body.style.display = collapsed ? 'none' : 'block';
+        arrow.textContent = collapsed ? '▾' : '▴';
+      });
+
+      // GPL-3.0 协议全文：点击展开/收起
+      document.getElementById('gplHeader').addEventListener('click', () => {
+        const body = document.getElementById('gplBody');
+        const arrow = document.getElementById('gplArrow');
+        const collapsed = body.style.display !== 'none';
+        body.style.display = collapsed ? 'none' : 'block';
+        arrow.textContent = collapsed ? '▾' : '▴';
+      });
+
+      // 温馨提示：点击进入 KOOK 语音开黑
+      document.getElementById('tipSupport').addEventListener('click', () => {
+        if (electronAPI) electronAPI.openExternal('https://kook.vip/2CDSmt');
+      });
+
+      // 游戏手柄按钮：悬停弹出、挪开收回、点击固定、打开KOOK
+      (function() {
+        const btn = document.getElementById('btnGamepad');
+        const pop = document.getElementById('gamepadPop');
+        let pinned = false;
+        btn.addEventListener('mouseenter', () => { pop.style.display = 'block'; });
+        btn.addEventListener('mouseleave', () => { if (!pinned) pop.style.display = 'none'; });
+        pop.addEventListener('mouseleave', () => { if (!pinned) pop.style.display = 'none'; });
+        pop.addEventListener('mouseenter', () => { pop.style.display = 'block'; });
+        btn.addEventListener('click', (e) => { e.stopPropagation(); pinned = !pinned; pop.style.display = pinned ? 'block' : 'none'; });
+        document.getElementById('btnOpenKook').addEventListener('click', () => {
+          if (electronAPI) electronAPI.openExternal('https://kook.vip/2CDSmt');
+        });
+        document.getElementById('kookLink').addEventListener('click', (e) => {
+          e.preventDefault();
+          if (electronAPI) electronAPI.openExternal('https://kook.vip/2CDSmt');
+        });
+      })();
+
+      // Statshark 玩家查询：点击🔍直接在应用内打开
+      document.getElementById('btnPlayerSearch').addEventListener('click', () => {
+        if (electronAPI && electronAPI.openPlayerSearch) electronAPI.openPlayerSearch();
+      });
+
+      // GitHub 仓库：点击打开项目主页
+      document.getElementById('btnGitHub').addEventListener('click', () => {
+        if (electronAPI) electronAPI.openExternal('https://github.com/HZEOND/War-Thunder-Map-Marker-Rangefinding');
+      });
+
+      // ===== 训练状态/样本计数/环境检测/采集状态 =====
+      function setTrainStatus(txt, color) {
+        document.getElementById('trainStatus').textContent = txt;
+        document.getElementById('trainStatus').style.color = color || 'rgba(255,255,255,0.5)';
+      }
+      function updateProgressBar(pct, epoch, total) {
+        const bar = document.getElementById('trainProgressBar');
+        const fill = document.getElementById('trainProgressFill');
+        const text = document.getElementById('trainProgressText');
+        bar.style.display = 'block';
+        text.style.display = 'block';
+        fill.style.width = pct + '%';
+        text.textContent = (epoch != null && total != null) ? ('训练中 第' + epoch + '/' + total + '轮 · ' + pct + '%') : ('训练中 ' + pct + '%');
+      }
+      function hideProgressBar() {
+        document.getElementById('trainProgressBar').style.display = 'none';
+        document.getElementById('trainProgressText').style.display = 'none';
+      }
+      // 训练回退后，在人工筛选窗口的图片右上角打上 ✕ 错误标记
+      function markRejectedSamples() {
+        // 将错误标记数据存入全局，供 openManualSelect 渲染时叠加
+        window._rejectedSamples = true;
+      }
+      // 采集状态指示（🧠）
+      let lastCollectTime = 0, detecting = false;
+      function updateCollectIndicator() {
+        const ind = document.getElementById('trainIndicator');
+        if (!detecting) { ind.style.opacity = '0.5'; ind.title = '未开始识别'; return; }
+        const now = Date.now();
+        if (lastCollectTime && now - lastCollectTime < 15000) {
+          ind.style.opacity = '1'; ind.style.filter = 'none';
+          ind.title = '正在采集样本';
+        } else {
+          ind.style.opacity = '1'; ind.style.filter = 'grayscale(0.6) sepia(1) hue-rotate(-30deg)';
+          ind.title = '无法采集到样本（需画面中出现箭头/黄标）';
+        }
+      }
+      function noteCollectEvent(status) {
+        if (status === 'measured' || status === 'searching' || status === 'partial') detecting = true;
+        if (status === 'collected') { lastCollectTime = Date.now(); refreshSampleCount(); }
+        updateCollectIndicator();
+      }
+      setInterval(updateCollectIndicator, 3000);
+
+      async function refreshSampleCount() {
+        if (!electronAPI || !electronAPI.getSampleCount) return;
+        const r = await electronAPI.getSampleCount();
+        document.getElementById('sampleCount').textContent = r.count + ' / ' + r.max;
+        document.getElementById('trainIndicator').title = document.getElementById('trainIndicator').title + ' | 样本 ' + r.count + '/' + r.max;
+      }
+      async function checkTrainEnv() {
+        if (!electronAPI || !electronAPI.retrainCheck) return;
+        const r = await electronAPI.retrainCheck();
+        document.getElementById('trainEnvHint').style.display = r.envOk ? 'none' : 'block';
+      }
+      document.getElementById('btnInstallEnv').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const btn = e.target; btn.textContent = '安装中...';
+        if (electronAPI && electronAPI.installTrainEnv) {
+          const r = await electronAPI.installTrainEnv();
+          btn.textContent = '⬇ 安装训练环境';
+          await checkTrainEnv();
+          setTrainStatus(r.ok ? '环境已安装' : '安装失败', r.ok ? '#00d98a' : '#ff6b6b');
+        }
+      });
+      if (electronAPI && electronAPI.onRetrainProgress) {
+        electronAPI.onRetrainProgress((o) => {
+          if (o.status === 'training') setTrainStatus('训练中', '#b06bff');
+          else if (o.status === 'progress') updateProgressBar(o.pct, o.epoch, o.total);
+          else if (o.status === 'done') { setTrainStatus('完成', '#00d98a'); hideProgressBar(); window._rejectedSamples = false; refreshSampleCount(); }
+          else if (o.status === 'rejected') { setTrainStatus('已回退', '#ffaa00'); hideProgressBar(); markRejectedSamples(); }
+          else if (o.status === 'reloaded') setTrainStatus('已热更新', '#00d98a');
+          else if (o.status === 'error') { setTrainStatus('失败', '#ff6b6b'); hideProgressBar(); }
+          else if (o.status === 'info') {/* noop */}
+        });
+      }
+      setInterval(refreshSampleCount, 5000);
+      refreshSampleCount();
+      checkTrainEnv();
+
+      // 增量训练 AI（边测距边训练）
+      document.getElementById('btnTrain').addEventListener('click', async () => {
+        const out = document.getElementById('verifyResult');
+        out.style.display = 'block';
+        out.textContent = '训练中...（用测距收集的样本微调模型，可能需要几分钟）';
+        setTrainStatus('训练中', '#b06bff');
+        if (!electronAPI || !electronAPI.retrainAI) { out.textContent = '当前环境不支持训练'; setTrainStatus('失败', '#ff6b6b'); return; }
+        const r = await electronAPI.retrainAI();
+        if (r.result && r.result.status === 'done') {
+          out.innerHTML = '<span style="color:#00d98a;">训练完成！用 ' + r.result.samples + ' 个样本更新模型，已自动热更新。</span>';
+          setTrainStatus('完成', '#00d98a');
+        } else if (r.result && r.result.status === 'rejected') {
+          out.innerHTML = '<span style="color:#ffaa00;">新模型检测无效，已自动回退旧模型，识别不受影响。可继续收集样本后再训练。</span>';
+          setTrainStatus('已回退', '#ffaa00');
+        } else if (r.result && r.result.status === 'error') {
+          out.innerHTML = '<span style="color:#ffaa00;">' + r.result.msg + '</span>';
+          setTrainStatus('空闲', 'rgba(255,255,255,0.5)');
+        } else {
+          out.innerHTML = '<span style="color:#ff6b6b;">训练失败: ' + (r.stderr || r.error || '未知') + '</span>';
+          setTrainStatus('失败', '#ff6b6b');
+        }
+        refreshSampleCount();
+      });
+
+      // 查看使用日志（内含"导出到桌面"选项）
+      document.getElementById('btnLog').addEventListener('click', async () => {
+        const out = document.getElementById('verifyResult');
+        out.style.display = 'block';
+        out.textContent = '读取日志...';
+        if (!electronAPI || !electronAPI.readLog) { out.textContent = '当前环境不支持'; return; }
+        const r = await electronAPI.readLog();
+        const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        out.style.whiteSpace = 'normal';
+        out.innerHTML = '<pre style="white-space:pre-wrap;max-height:110px;overflow-y:auto;margin:0;">' + esc(r.text || '(空)') + '</pre>'
+          + '<button id="btnExportLogInner" class="btn" style="width:100%;margin-top:6px;padding:4px;font-size:10px;background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);">📤 导出日志到桌面</button>'
+          + '<span id="exportLogMsg" style="font-size:10px;display:block;margin-top:4px;"></span>';
+        document.getElementById('btnExportLogInner').addEventListener('click', async () => {
+          const er = await electronAPI.exportLog();
+          document.getElementById('exportLogMsg').innerHTML = er.ok
+            ? '<span style="color:#00d98a;">已导出到桌面: WT屏幕像素测距-系统日志.txt</span>'
+            : '<span style="color:#ff6b6b;">导出失败: ' + (er.msg || '') + '</span>';
+        });
+        out.scrollTop = out.scrollHeight;
+      });
+
+      // 筛选样本（规则+置信度）
+      document.getElementById('btnFilter').addEventListener('click', async () => {
+        const out = document.getElementById('verifyResult');
+        out.style.display = 'block';
+        out.style.whiteSpace = 'normal';
+        out.textContent = '自动筛选中...';
+        if (!electronAPI || !electronAPI.filterSamples) { out.textContent = '当前环境不支持'; return; }
+        const r = await electronAPI.filterSamples();
+        let msg = '保留 ' + (r.kept || 0) + ' 个高质量样本，剔除 ' + (r.dropped || 0) + ' 个。';
+        if (r.fallback) msg += '（高置信度不足，已兜底保留规则通过的样本）';
+        out.innerHTML = '<span style="color:#00d98a;">' + msg + '</span>';
+        refreshSampleCount();
+        // 自动打开人工挑选窗口供二次确认
+        openManualSelect();
+      });
+
+      // 人工挑选（直接打开，跳过自动筛选）
+      document.getElementById('btnManualPick').addEventListener('click', () => {
+        const out = document.getElementById('verifyResult');
+        out.style.display = 'block';
+        out.innerHTML = '<span style="color:#00ff88;">👁 请在下方窗口中勾选高质量样本 → 点「加入训练」上传到 AI。</span>';
+        openManualSelect();
+      });
+
+      // ===== 人工筛选样本窗口 =====
+      async function openManualSelect() {
+        const grid = document.getElementById('sampleGrid');
+        grid.innerHTML = '<span style="color:rgba(255,255,255,0.5);font-size:11px;">加载样本...</span>';
+        document.getElementById('manualSelectModal').style.display = 'flex';
+        mouseOnPanel = true;
+        if (electronAPI) electronAPI.setMouseIgnore(false);   // 立即可点击
+        if (!electronAPI || !electronAPI.listSamples) { grid.innerHTML = '当前环境不支持'; return; }
+        const r = await electronAPI.listSamples();
+        if (!r.samples || r.samples.length === 0) {
+          grid.innerHTML = '<span style="color:rgba(255,255,255,0.5);font-size:11px;">暂无样本，先开始AI识别收集。</span>';
+          return;
+        }
+        grid.innerHTML = '';
+        r.samples.forEach(s => {
+          const cell = document.createElement('div');
+          cell.className = 'sample-cell';
+          cell.style.cssText = 'position:relative;cursor:pointer;border:2px solid transparent;border-radius:8px;overflow:hidden;';
+          const img = document.createElement('img');
+          img.src = s.data;
+          img.style.cssText = 'width:100%;height:80px;object-fit:cover;display:block;';
+          img.title = '点击查看原图';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.dataset.name = s.name;
+          cb.style.cssText = 'position:absolute;top:4px;left:4px;width:16px;height:16px;z-index:2;';
+          // 训练回退后，在右上角打上 ✕ 错误标记（直到下次成功训练后清除）
+          if (window._rejectedSamples) {
+            const mark = document.createElement('div');
+            mark.style.cssText = 'position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(255,80,80,0.9);color:#fff;font-size:12px;line-height:18px;text-align:center;border-radius:50%;z-index:1;font-weight:bold;box-shadow:0 1px 4px rgba(0,0,0,0.5);';
+            mark.textContent = '✕';
+            mark.title = '训练回退后可能含有异常样本，建议删除';
+            cell.appendChild(mark);
+          }
+          // 点击图片放大查看原图（点复选框不触发）
+          img.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showSamplePreview(s.data, s.name);
+          });
+          cell.appendChild(img);
+          cell.appendChild(cb);
+          cb.addEventListener('change', (e) => {
+            cell.style.borderColor = e.target.checked ? '#00c864' : 'transparent';
+          });
+          grid.appendChild(cell);
+        });
+        // 重新渲染后清除标记，下一次回退再打上
+        if (!window._rejectedSamples) window._rejectedSamples = false;
+      }
+
+      // ===== 鼠标左键拖拽框选批量勾选样本 =====
+      (function setupLassoSelect() {
+        const grid = document.getElementById('sampleGrid');
+        let lassoStart = null, isLasso = false, lassoEl = null, selMode = 'add', lassoEnd = null;
+
+        // 鼠标滚轮滚动样本列表（透明窗口下显式处理，确保可滚动查看全部样本）
+        grid.addEventListener('wheel', (e) => {
+          if (grid.scrollHeight <= grid.clientHeight + 1) return;  // 无溢出则不处理
+          e.preventDefault();
+          e.stopPropagation();
+          grid.scrollTop += e.deltaY;
+        }, { passive: false });
+
+        function getLassoEl() {
+          if (!lassoEl) {
+            lassoEl = document.createElement('div');
+            lassoEl.style.cssText = 'position:absolute;border:2px solid #00c8ff;background:rgba(0,200,255,0.18);pointer-events:none;z-index:100;border-radius:4px;box-shadow:0 0 8px rgba(0,200,255,0.3);';
+            grid.style.position = 'relative';
+            grid.appendChild(lassoEl);
+          }
+          return lassoEl;
+        }
+
+        function updateLassoRect() {
+          if (!lassoStart || !lassoEnd || !lassoEl) return;
+          const rect = grid.getBoundingClientRect();
+          const sx = lassoStart.x - rect.left + grid.scrollLeft;
+          const sy = lassoStart.y - rect.top + grid.scrollTop;
+          const cx = lassoEnd.x - rect.left + grid.scrollLeft;
+          const cy = lassoEnd.y - rect.top + grid.scrollTop;
+          lassoEl.style.left = Math.min(sx, cx) + 'px';
+          lassoEl.style.top = Math.min(sy, cy) + 'px';
+          lassoEl.style.width = Math.abs(cx - sx) + 'px';
+          lassoEl.style.height = Math.abs(cy - sy) + 'px';
+          lassoEl.style.borderColor = selMode === 'remove' ? '#ff6b6b' : '#00c8ff';
+          lassoEl.style.background = selMode === 'remove' ? 'rgba(255,80,80,0.18)' : 'rgba(0,200,255,0.18)';
+        }
+
+        grid.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          if (e.target.tagName === 'INPUT') return;
+          lassoStart = { x: e.clientX, y: e.clientY };
+          lassoEnd = { x: e.clientX, y: e.clientY };
+          isLasso = false;
+        });
+
+        document.addEventListener('mousemove', (e) => {
+          if (!lassoStart) return;
+          lassoEnd = { x: e.clientX, y: e.clientY };
+          const dx = lassoEnd.x - lassoStart.x;
+          const dy = lassoEnd.y - lassoStart.y;
+          if (!isLasso && Math.hypot(dx, dy) > 5) {
+            isLasso = true;
+            selMode = (e.altKey || e.shiftKey) ? 'remove' : 'add';
+            getLassoEl().style.display = 'block';
+          }
+          if (isLasso) updateLassoRect();
+        });
+
+        document.addEventListener('mouseup', () => {
+          if (!lassoStart) return;
+          const wasLasso = isLasso;
+          const start = lassoStart, end = lassoEnd;
+          lassoStart = null; lassoEnd = null; isLasso = false;
+          if (lassoEl) lassoEl.style.display = 'none';
+          if (!wasLasso) return;
+
+          const rect = grid.getBoundingClientRect();
+          const left = Math.min(start.x, end.x) - rect.left + grid.scrollLeft;
+          const top = Math.min(start.y, end.y) - rect.top + grid.scrollTop;
+          const right = Math.max(start.x, end.x) - rect.left + grid.scrollLeft;
+          const bottom = Math.max(start.y, end.y) - rect.top + grid.scrollTop;
+          grid.querySelectorAll('.sample-cell').forEach(cell => {
+            const cr = cell.getBoundingClientRect();
+            const cLeft = cr.left - rect.left + grid.scrollLeft;
+            const cTop = cr.top - rect.top + grid.scrollTop;
+            const cRight = cLeft + cr.width;
+            const cBottom = cTop + cr.height;
+            if (cRight >= left && cLeft <= right && cBottom >= top && cTop <= bottom) {
+              const cb = cell.querySelector('input[type=checkbox]');
+              if (cb) {
+                cb.checked = selMode === 'remove' ? false : true;
+                cell.style.borderColor = cb.checked ? '#00c864' : 'transparent';
+              }
+            }
+          });
+        });
+      })();
+
+      // 大图预览
+      function showSamplePreview(dataUrl, name) {
+        const modal = document.getElementById('samplePreviewModal');
+        const img = document.getElementById('samplePreviewImg');
+        img.src = dataUrl;
+        modal.style.display = 'flex';
+      }
+      document.getElementById('samplePreviewModal').addEventListener('click', () => {
+        document.getElementById('samplePreviewModal').style.display = 'none';
+      });
+      document.getElementById('btnCloseManual').addEventListener('click', () => {
+        document.getElementById('manualSelectModal').style.display = 'none';
+      });
+      document.getElementById('btnAddToTrain').addEventListener('click', async () => {
+        const checked = [...document.querySelectorAll('#sampleGrid input:checked')].map(i => i.dataset.name);
+        if (!electronAPI || !electronAPI.confirmSamples) return;
+        const r = await electronAPI.confirmSamples(checked);
+        document.getElementById('manualSelectModal').style.display = 'none';
+        const out = document.getElementById('verifyResult');
+        out.style.display = 'block';
+        out.innerHTML = '<span style="color:#00d98a;">已加入训练 ' + (r.count || 0) + ' 个人工挑选样本。点🧠训练AI开始训练。</span>';
+        refreshSampleCount();
+      });
+      // 删除选中的低质量样本
+      document.getElementById('btnDeleteSamples').addEventListener('click', async () => {
+        const checked = [...document.querySelectorAll('#sampleGrid input:checked')].map(i => i.dataset.name);
+        if (checked.length === 0) return;
+        if (!electronAPI || !electronAPI.deleteSamples) return;
+        const r = await electronAPI.deleteSamples(checked);
+        const out = document.getElementById('verifyResult');
+        out.style.display = 'block';
+        out.innerHTML = '<span style="color:#ff6b6b;">已删除 ' + (r.count || 0) + ' 个低质量样本（已放入回收站）。</span>';
+        refreshSampleCount();
+        openManualSelect();   // 刷新缩略图列表
+      });
+      // 打开样本文件夹
+      document.getElementById('btnOpenSamplesFolder').addEventListener('click', async () => {
+        if (electronAPI && electronAPI.openSamplesFolder) {
+          const r = await electronAPI.openSamplesFolder();
+          const out = document.getElementById('verifyResult');
+          out.style.display = 'block';
+          if (r.ok) out.innerHTML = '<span style="color:#00c8ff;">已打开「采集样本」文件夹（' + r.path + '），可自行查看/删除样本。删除样本不影响已训练模型。</span>';
+        }
+      });
+
+      // 文件完整性校验
+      document.getElementById('btnVerify').addEventListener('click', async () => {
+        const out = document.getElementById('verifyResult');
+        out.style.display = 'block';
+        out.textContent = '校验中...';
+        if (!electronAPI || !electronAPI.verifyFiles) { out.textContent = '当前环境不支持校验'; return; }
+        const r = await electronAPI.verifyFiles();
+        let html = '';
+        r.results.forEach(x => { html += (x.ok ? '✓ ' : '✗ ') + x.name + '<br>'; });
+        html += '<span style="color:' + (r.allOk ? '#00d98a' : '#ff6b6b') + ';">' + (r.allOk ? '全部文件完整，可独立使用' : '有文件缺失，请重新解压') + '</span>';
+        out.innerHTML = html;
+      });
+
+      // ===== 软件更新（GitHub Releases）=====
+      let updateInfo = null;      // 缓存的更新信息
+      let updateDownloading = false;
+
+      function showUpdateStatus(text, color) {
+        const el = document.getElementById('updateStatus');
+        el.textContent = text;
+        el.style.color = color || 'rgba(255,255,255,0.5)';
+      }
+
+      async function checkForUpdate(silent) {
+        if (!electronAPI || !electronAPI.checkUpdate) return;
+        if (!silent) showUpdateStatus('检查中...', '#ffaa00');
+        const r = await electronAPI.checkUpdate();
+        if (r.error) {
+          if (!silent) showUpdateStatus('检查失败', '#ff6b6b');
+          else showUpdateStatus('当前 v' + (r.current || '?'), 'rgba(255,255,255,0.5)');
+          return;
+        }
+        if (r.hasUpdate) {
+          updateInfo = r;
+          document.getElementById('updateIndicator').style.display = 'inline-flex';
+          showUpdateStatus('发现新版本 v' + r.latest, '#ff4d4f');
+          if (!silent) openUpdateModal();
+        } else {
+          updateInfo = null;
+          document.getElementById('updateIndicator').style.display = 'none';
+          showUpdateStatus('已是最新 v' + r.current, '#00d98a');
+          if (!silent) openUpdateModal(false);
+        }
+      }
+
+      function openUpdateModal(isLatest) {
+        const modal = document.getElementById('updateModal');
+        if (isLatest === false) {
+          document.getElementById('updateVersionText').textContent = '当前已是最新版本';
+          document.getElementById('updateChangelog').textContent = '当前版本 v' + (updateInfo ? updateInfo.current : '') + '，暂无新版本可用。';
+          document.getElementById('btnUpdateDownload').style.display = 'none';
+          document.getElementById('btnUpdateCancel').textContent = '关闭';
+        } else if (updateInfo) {
+          document.getElementById('updateVersionText').textContent = 'v' + updateInfo.current + ' → v' + updateInfo.latest;
+          document.getElementById('updateChangelog').textContent = updateInfo.changelog || '（无更新说明）';
+          document.getElementById('btnUpdateDownload').style.display = 'block';
+          document.getElementById('btnUpdateDownload').textContent = '下载更新';
+          document.getElementById('btnUpdateDownload').disabled = false;
+          document.getElementById('btnUpdateCancel').textContent = '取消';
+          document.getElementById('updateProgressWrap').style.display = 'none';
+          updateDownloading = false;
+        }
+        modal.style.display = 'flex';
+        if (electronAPI) electronAPI.setMouseIgnore(false);
+        mouseOnPanel = true;
+      }
+
+      document.getElementById('btnCheckUpdate').addEventListener('click', () => checkForUpdate(false));
+      document.getElementById('updateIndicator').addEventListener('click', () => { if (updateInfo) openUpdateModal(); });
+      document.getElementById('btnUpdateCancel').addEventListener('click', () => {
+        if (updateDownloading) return;   // 下载中不允许取消
+        document.getElementById('updateModal').style.display = 'none';
+      });
+      document.getElementById('btnUpdateDownload').addEventListener('click', async () => {
+        if (!updateInfo || !updateInfo.downloadUrl || updateDownloading) return;
+        updateDownloading = true;
+        document.getElementById('btnUpdateDownload').textContent = '下载中...';
+        document.getElementById('btnUpdateDownload').disabled = true;
+        document.getElementById('updateProgressWrap').style.display = 'block';
+        document.getElementById('updateProgressText').textContent = '0%';
+        try {
+          const res = await electronAPI.downloadUpdate(updateInfo.downloadUrl);
+          if (res.ok) {
+            document.getElementById('updateProgressText').textContent = '下载完成，正在启动安装程序...';
+            await electronAPI.runInstaller(res.path);
+            document.getElementById('updateModal').style.display = 'none';
+          } else {
+            document.getElementById('updateProgressText').textContent = '下载失败';
+            updateDownloading = false;
+            document.getElementById('btnUpdateDownload').disabled = false;
+            document.getElementById('btnUpdateDownload').textContent = '下载更新';
+          }
+        } catch (e) {
+          document.getElementById('updateProgressText').textContent = '下载出错';
+          updateDownloading = false;
+          document.getElementById('btnUpdateDownload').disabled = false;
+          document.getElementById('btnUpdateDownload').textContent = '下载更新';
+        }
+      });
+      if (electronAPI && electronAPI.onUpdateProgress) {
+        electronAPI.onUpdateProgress((d) => {
+          const pct = d.pct || 0;
+          document.getElementById('updateProgressFill').style.width = pct + '%';
+          const mb = (d.received / 1024 / 1024).toFixed(1);
+          const totalMb = d.total ? (d.total / 1024 / 1024).toFixed(1) : '?';
+          document.getElementById('updateProgressText').textContent = pct + '%（' + mb + ' / ' + totalMb + ' MB）';
+        });
+      }
+      // 启动后自动检查更新（延迟，避免影响启动）
+      setTimeout(() => { checkForUpdate(true); }, 4000);
+
+      // 面板拉伸（右下角把手拖拽改宽高）
+      (function() {
+        const handle = document.getElementById('resizeHandle');
+        const panel = document.getElementById('floatingPanel');
+        let resizing = false, startX = 0, startY = 0, startW = 0, startH = 0;
+        handle.addEventListener('mousedown', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          resizing = true;
+          startX = e.clientX; startY = e.clientY;
+          startW = panel.offsetWidth; startH = panel.offsetHeight;
+          panel.style.overflow = 'hidden';
+        });
+        document.addEventListener('mousemove', (e) => {
+          if (!resizing) return;
+          const w = Math.max(300, startW + (e.clientX - startX));
+          const h = Math.max(200, startH + (e.clientY - startY));
+          panel.style.width = w + 'px';
+          panel.style.height = h + 'px';
+          const body = panel.querySelector('.panel-body');
+          if (body) body.style.overflowY = 'auto';
+        });
+        document.addEventListener('mouseup', () => { resizing = false; });
+      })();
+
+      // 应用透明度（面板背景）
+      function applyOpacity(v) {
+        uiOpacity = v;
+        document.getElementById('floatingPanel').style.background = 'rgba(20,20,30,' + v + ')';
+        document.getElementById('opacityVal').textContent = Math.round(v * 100) + '%';
+      }
+      document.getElementById('opacitySlider').addEventListener('input', (e) => {
+        applyOpacity(parseFloat(e.target.value));
+        saveSettings();
+      });
+
+      // 应用主题色（对面板内容做色相旋转）
+      function applyTheme(name) {
+        uiTheme = name;
+        const deg = THEME_HUE[name] || 0;
+        // 仅对面板主体做色相旋转，保持文字可读
+        document.getElementById('floatingPanel').style.filter = deg ? ('hue-rotate(' + deg + 'deg)') : 'none';
+        document.querySelectorAll('.theme-swatch').forEach(s => {
+          s.classList.toggle('active', s.dataset.theme === name);
+        });
+      }
+      document.querySelectorAll('.theme-swatch').forEach(s => {
+        s.addEventListener('click', () => { applyTheme(s.dataset.theme); saveSettings(); });
+      });
+
+      // 数字转中文读法（简单版，处理整数米）
+      function metersToSpeech(m) {
+        const n = Math.round(m);
+        return String(n);
+      }
+
+      // 触发节流播报
+      function tryBroadcast(meters) {
+        if (!rrVoiceEnabled || rrSpeaking) return;
+        const now = Date.now();
+        if (now - rrLastBroadcastTime < BROADCAST_INTERVAL) return;
+        if (rrLastBroadcastMeters >= 0 && Math.abs(meters - rrLastBroadcastMeters) < BROADCAST_MIN_CHANGE) return;
+        rrLastBroadcastTime = now;
+        rrLastBroadcastMeters = meters;
+        const m = metersToSpeech(meters);
+        manboSpeak('曼波曼波~ 测到啦！两个目标相距 ' + m + ' ' + unit + '，曼波！');
+      }
+
+      // 语音播报开关
+      document.getElementById('btnVoiceToggle').addEventListener('click', () => {
+        rrVoiceEnabled = !rrVoiceEnabled;
+        const btn = document.getElementById('btnVoiceToggle');
+        if (rrVoiceEnabled) {
+          btn.textContent = t('voiceOn');
+          btn.style.color = '#ffaa00';
+          btn.style.borderColor = 'rgba(255,170,0,0.4)';
+        } else {
+          btn.textContent = t('voiceOff');
+          btn.style.color = 'rgba(255,170,0,0.6)';
+          btn.style.borderColor = 'rgba(255,170,0,0.15)';
+        }
+        saveSettings();
+      });
+
+      // 试听按钮
+      document.getElementById('btnTestVoice').addEventListener('click', () => {
+        manboSpeak('曼波曼波~ 这是语音播报试听，曼波！');
+      });
+
+      // 阈值滑块
+      document.getElementById('rrThreshold').addEventListener('input', (e) => {
+        document.getElementById('rrThresholdVal').textContent = parseFloat(e.target.value).toFixed(2);
+      });
+
+      // 检查识别是否就绪（无区域时默认全屏识别，按钮始终可点）
+      function checkRRReady() {
+        const btn = document.getElementById('btnStartRR');
+        btn.disabled = false; // 始终可点击：未框选区域时自动识别全屏
+        if (rrRegion) {
+          document.getElementById('rrRegionText').textContent =
+            '(' + rrRegion.x + ',' + rrRegion.y + ') ' + rrRegion.w + 'x' + rrRegion.h + ' 已确认';
+        } else {
+          document.getElementById('rrRegionText').textContent = '全屏（未框选）';
+        }
+      }
+
+      // 手动框选区域
+      document.getElementById('btnSelectRegion').addEventListener('click', () => {
+        rrSelecting = true;
+        measureActive = true;
+        updateMouseIgnore();
+        if (electronAPI) electronAPI.setAlwaysOnTopLevel('floating');
+        document.getElementById('rrStatus').textContent = '在屏幕上拖拽框选识别区域...';
+        points = []; tempSecondPoint = null;
+      });
+
+      // 确认区域
+      document.getElementById('btnConfirmRegion').addEventListener('click', () => {
+        if (!pendingRegion) return;
+        rrRegion = pendingRegion;
+        document.getElementById('btnConfirmRegion').disabled = true;
+        document.getElementById('rrStatus').textContent = '区域已确认，可开始识别';
+        checkRRReady();
+        saveSettings();
+      });
+
+      // 删除框选区域
+      document.getElementById('btnDeleteRegion').addEventListener('click', () => {
+        pendingRegion = null;
+        rrRegion = null;
+        document.getElementById('btnConfirmRegion').disabled = true;
+        document.getElementById('btnDeleteRegion').disabled = true;
+        document.getElementById('rrStatus').textContent = '区域已删除，请重新框选';
+        checkRRReady();
+        saveSettings();
+        drawCanvas();
+      });
+
+      // 开始/停止区域实时识别
+      document.getElementById('btnStartRR').addEventListener('click', async () => {
+        const btn = document.getElementById('btnStartRR');
+        const status = document.getElementById('rrStatus');
+        const resultDiv = document.getElementById('rrResult');
+
+        if (rrRunning) {
+          if (electronAPI) await electronAPI.stopRegionRealtime();
+          rrRunning = false;
+          btn.textContent = t('startRR');
+          btn.style.background = 'rgba(255,170,0,0.08)';
+          btn.style.borderColor = 'rgba(255,170,0,0.2)';
+          btn.style.color = '#ffaa00';
+          status.textContent = t('stopped');
+          resultDiv.style.display = 'none';
+          return;
+        }
+
+        if (!rrRegion) {
+          status.textContent = '未框选区域，将识别全屏';
+        }
+
+        // 未框选区域时默认识别整个屏幕
+        const region = rrRegion || { x: 0, y: 0, w: canvasWidth, h: canvasHeight };
+
+        rrRunning = true;
+        btn.textContent = t('stopRR');
+        btn.style.background = 'rgba(255,80,80,0.1)';
+        btn.style.borderColor = 'rgba(255,80,80,0.3)';
+        btn.style.color = '#ff6b6b';
+        status.textContent = '正在启动 YOLO 识别...';
+        resultDiv.style.display = 'none';
+
+        const threshold = parseFloat(document.getElementById('rrThreshold').value);
+        const res = await electronAPI.startRegionRealtime(null, null, region, threshold, 0.8);
+
+        if (res && res.error) {
+          status.textContent = '启动失败: ' + res.error;
+          rrRunning = false;
+          btn.textContent = t('startRR');
+          return;
+        }
+        status.textContent = 'YOLO 识别中...';
+      });
+
+      // 监听区域实时结果
+      if (electronAPI) {
+        electronAPI.onRegionRealtimeResult((data) => {
+          const status = document.getElementById('rrStatus');
+          const resultDiv = document.getElementById('rrResult');
+          const metersDiv = document.getElementById('rrMeters');
+          if (typeof noteCollectEvent === 'function') noteCollectEvent(data.status);
+          if (data.status === 'measured') {
+            window.rrSearchingStart = null;
+            status.style.color = '';
+            points = [
+              { x: data.a.abs.x, y: data.a.abs.y },
+              { x: data.b.abs.x, y: data.b.abs.y }
+            ];
+            updateDisplay(); drawCanvas();
+            const dist = data.pixel_distance;
+            const converted = coefB === 0 ? 0 : dist * coefA / coefB;
+            resultDiv.textContent = '像素: ' + dist + 'px | A:' + (data.a.score*100).toFixed(0) + '% B:' + (data.b.score*100).toFixed(0) + '%';
+            resultDiv.style.display = 'block';
+            metersDiv.textContent = '实际距离: ' + converted.toFixed(2) + ' ' + unit;
+            metersDiv.style.display = 'block';
+            status.textContent = '区域识别中 ✓ 双目标已锁定';
+            // 测距成功0.5秒后自动清除直线（保持屏幕干净，利于AI下次识图），自动识别不停止
+            const myToken = ++lineToken;
+            if (lineClearTimer) clearTimeout(lineClearTimer);
+            lineClearTimer = setTimeout(() => {
+              if (myToken === lineToken) {
+                points = [];
+                drawCanvas();
+              }
+            }, 500);
+            // 语音播报（节流）
+            tryBroadcast(converted);
+          } else if (data.status === 'partial') {
+            window.rrSearchingStart = null;
+            status.style.color = '';
+            status.textContent = '部分匹配: 找到' + data.found;
+            resultDiv.style.display = 'none';
+            metersDiv.style.display = 'none';
+          } else if (data.status === 'searching') {
+            if (!window.rrSearchingStart) window.rrSearchingStart = Date.now();
+            const elapsed = Math.round((Date.now() - window.rrSearchingStart) / 1000);
+            if (elapsed >= 10) {
+              status.textContent = '⚠ 10秒未检出：区域可能错位或游戏未运行';
+              status.style.color = '#ff6b6b';
+            } else {
+              status.textContent = '区域搜索中...';
+              status.style.color = '';
+            }
+            resultDiv.style.display = 'none';
+            metersDiv.style.display = 'none';
+          } else {
+            window.rrSearchingStart = null;
+            status.style.color = '';
+          }
+        });
+        electronAPI.onRegionRealtimeError((err) => {
+          document.getElementById('rrStatus').textContent = '错误: ' + err;
+        });
+        electronAPI.onRegionRealtimeStopped(() => {
+          rrRunning = false;
+          const btn = document.getElementById('btnStartRR');
+          btn.textContent = t('startRR');
+          btn.style.background = 'rgba(255,170,0,0.08)';
+          btn.style.borderColor = 'rgba(255,170,0,0.2)';
+          btn.style.color = '#ffaa00';
+          document.getElementById('rrStatus').textContent = t('stopped');
+        });
+      }
+
+      // 窗口控制
+      document.getElementById('btnMin').addEventListener('click', () => { if (electronAPI) electronAPI.minimize(); });
+
+      // 关闭选择：记住的选择直接执行，否则弹窗
+      let closeChoice = '';   // 'tray' | 'exit' | ''
+      function doClose(action) {
+        if (action === 'tray') { if (electronAPI) electronAPI.hide(); }
+        else { if (electronAPI) electronAPI.close(); }
+      }
+      document.getElementById('btnClose').addEventListener('click', () => {
+        if (closeChoice) { doClose(closeChoice); return; }
+        document.getElementById('closeDialog').style.display = 'flex';
+      });
+      document.getElementById('btnCloseToTray').addEventListener('click', () => {
+        if (document.getElementById('rememberClose').checked) { closeChoice = 'tray'; saveSettings(); }
+        document.getElementById('closeDialog').style.display = 'none';
+        doClose('tray');
+      });
+      document.getElementById('btnCloseExit').addEventListener('click', () => {
+        if (document.getElementById('rememberClose').checked) { closeChoice = 'exit'; saveSettings(); }
+        document.getElementById('closeDialog').style.display = 'none';
+        doClose('exit');
+      });
+
+      // 绑定测量事件
+      interactionLayer.addEventListener('mousedown', pDown);
+      interactionLayer.addEventListener('mousemove', pMove);
+      interactionLayer.addEventListener('mouseup', pUp);
+      interactionLayer.addEventListener('mouseleave', () => {
+        if (points.length === 1 && isSettingSecondPoint) { tempSecondPoint = null; isSettingSecondPoint = false; updateDisplay(); drawCanvas(); }
+      });
+      interactionLayer.addEventListener('touchstart', pDown, { passive: false });
+      interactionLayer.addEventListener('touchmove', pMove, { passive: false });
+      interactionLayer.addEventListener('touchend', (e) => { e.preventDefault(); pUp(); });
+      document.getElementById('resetBtn').addEventListener('click', reset);
+      document.getElementById('clearCanvasBtn').addEventListener('click', reset);
+      document.addEventListener('dragstart', (e) => e.preventDefault());
+      document.addEventListener('selectstart', (e) => e.preventDefault());
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) resizeCanvas(); });
+
+      // 初始化
+      resizeCanvas(); updateDisplay(); updateHint(); drawCanvas(); updateMouseIgnore();
+      // 启动后短暂保持可交互，等首次 mousemove 后自动切换穿透
+      setTimeout(() => { if (!mouseOnPanel && !measureActive && !forceInteractive && !guideNotDone) { if (electronAPI) electronAPI.setMouseIgnore(true); } }, 2000);
+      // 启动时加载设置（放在最后，确保所有函数/变量已定义）
+      loadSettings();
+      // 打开时面板居中
+      centerPanel();
+
+      // ===== 首次使用协议 =====
+      var savedAgreed = false;      // 从设置读取（var 提升，供 loadSettings 赋值）
+      let agreedFlag = false;
+
+      // ===== 新用户操作指引 =====
+      var savedGuideDone = false;   // 从设置读取（var 提升，供 loadSettings 赋值）
+      let guideActive = false;
+      let guideStepNum = 0;
+      let guideDoneFlag = false;
+
+      // 打开时面板居中
+      function centerPanel() {
+        const w = panel.offsetWidth, h = panel.offsetHeight;
+        panel.style.right = 'auto';
+        panel.style.left = Math.max(10, (window.innerWidth - w) / 2) + 'px';
+        panel.style.top = Math.max(10, (window.innerHeight - h) / 2) + 'px';
+      }
+      // 指引横幅放在面板左侧
+      function positionGuideLeft() {
+        const banner = document.getElementById('guideBanner');
+        const pr = panel.getBoundingClientRect();
+        banner.style.left = 'auto';
+        banner.style.transform = 'none';
+        banner.style.top = pr.top + 'px';
+        banner.style.right = (window.innerWidth - pr.left + 12) + 'px';
+      }
+
+      const GUIDE_STEPS = {
+        1: '第1步：请点击【矩形】按钮。',
+        2: '第2步：建议进入战争雷霆对局，点击【进入测量模式】，在右下角小地图测量"地图单格像素长度"（一般默认 60）。',
+        3: '第3步：填写【测量像素值】，然后点击【直线】按钮。',
+        4: '第4步：点击【手动框选】，在对局右下角小地图划一个区域。',
+        5: '第5步：点击【确认区域】生效。（想重新划选可点【删除框选】）',
+        6: '第6步：主题色、快捷键、语音包等设置都在上方【⚙设置】里。指引完成，祝使用愉快！'
+      };
+
+      function showGuideStep(n) {
+        guideStepNum = n;
+        document.getElementById('guideText').textContent = GUIDE_STEPS[n];
+        document.getElementById('guideStep').textContent = n + ' / 6';
+        document.getElementById('guideBanner').style.display = 'block';
+        positionGuideLeft();
+        if (n === 6) {
+          // 最后一步：显示后自动完成
+          setTimeout(finishGuide, 6000);
+        }
+      }
+      function finishGuide() {
+        guideActive = false;
+        guideDoneFlag = true;
+        forceInteractive = false;
+        guideNotDone = false;
+        document.getElementById('guideBanner').style.display = 'none';
+        updateMouseIgnore();   // 恢复点击穿透逻辑
+        saveSettings();
+      }
+      function startGuide() {
+        guideActive = true;
+        forceInteractive = true;
+        if (electronAPI) electronAPI.setMouseIgnore(false);  // 指引期间全部可点击
+        document.getElementById('welcomeModal').style.display = 'none';
+        showGuideStep(1);
+      }
+
+      // 公告内容复制到欢迎弹窗
+      function showWelcome() {
+        const notice = document.getElementById('noticeContent');
+        document.getElementById('welcomeContent').innerHTML = notice.innerHTML;
+        document.getElementById('welcomeModal').style.display = 'flex';
+        if (electronAPI) electronAPI.setMouseIgnore(false);  // 弹窗立即可点击
+        mouseOnPanel = true;
+      }
+
+      // ===== 首次使用协议 =====
+      function showAgreement() {
+        document.getElementById('agreementModal').style.display = 'flex';
+        if (electronAPI) electronAPI.setMouseIgnore(false);  // 弹窗立即可点击
+        mouseOnPanel = true;
+      }
+      document.getElementById('agreementCheck').addEventListener('change', (e) => {
+        document.getElementById('btnAgreeConfirm').disabled = !e.target.checked;
+      });
+      document.getElementById('btnAgreeConfirm').addEventListener('click', () => {
+        agreedFlag = true;
+        saveSettings();
+        document.getElementById('agreementModal').style.display = 'none';
+        // 同意后继续显示公告 + 新手引导
+        if (!guideDoneFlag && !savedGuideDone) showWelcome();
+        else updateMouseIgnore();
+      });
+      document.getElementById('btnAgreeDisagree').addEventListener('click', () => {
+        if (electronAPI && electronAPI.quitApp) electronAPI.quitApp();   // 不同意则退出软件
+      });
+
+      document.getElementById('btnStartGuide').addEventListener('click', startGuide);
+      document.getElementById('guideSkip').addEventListener('click', finishGuide);
+
+      // 指引推进钩子（监听实际操作）
+      document.querySelectorAll('.mode-btn').forEach(b => {
+        b.addEventListener('click', () => {
+          if (!guideActive) return;
+          if (b.dataset.mode === 'rect' && guideStepNum === 1) showGuideStep(2);
+          if (b.dataset.mode === 'line' && guideStepNum === 3) showGuideStep(4);
+        });
+      });
+      document.getElementById('measureToggle').addEventListener('click', () => {
+        if (guideActive && guideStepNum === 2) showGuideStep(3);
+      });
+      document.getElementById('btnSelectRegion').addEventListener('click', () => {
+        if (guideActive && guideStepNum === 4) showGuideStep(5);
+      });
+      document.getElementById('btnConfirmRegion').addEventListener('click', () => {
+        if (guideActive && guideStepNum === 5) showGuideStep(6);
+      });
+
+      // 首次启动：先显示协议（未同意时），同意后再显示公告+指引（guideDone 未设置时）
+      setTimeout(() => {
+        if (!agreedFlag && !savedAgreed) {
+          showAgreement();
+        } else if (!guideDoneFlag && !savedGuideDone) {
+          showWelcome();
+        }
+      }, 500);
+
+    })();
+  </script>
+</body>
+</html>
