@@ -1,0 +1,23 @@
+{
+  "name": "pixel-ruler",
+  "version": "1.9.2",
+  "description": "WT屏幕像素测距 - Screen Pixel Euclidean Distance Ruler",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --dir"
+  },
+  "build": {
+    "appId": "com.pixelruler.app",
+    "productName": "PixelRuler",
+    "icon": "icon.ico",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "index.html", "yolo_rt/**", "tts_speak.exe", "retrain_yolo.py", "auto_filter_samples.py", "tts_speak.py", "icon.png", "icon32.png", "icon.ico", "kook_qr.png", "package.json"],
+    "asarUnpack": ["**/*.py", "**/*.onnx", "**/*.exe", "yolo_rt/**", "icon.png", "icon32.png", "**/*.ico"],
+    "win": { "target": [{ "target": "dir", "arch": ["x64"] }], "icon": "icon.ico" }
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  }
+}
